@@ -425,6 +425,7 @@ QPushButton {{ background: white; border: 1px solid {PALETTE['line']}; border-ra
 QPushButton:hover {{ border-color: {PALETTE['blue']}; color: {PALETTE['blue']}; }}
 QPushButton#primary {{ background: {PALETTE['blue']}; color: white; border: 0; padding: 10px 16px; }}
 QPushButton#primary:hover {{ background: #0874C2; color: white; }}
+QPushButton#danger {{ color: #B93F49; background: #FFF2F3; border-color: #F2C9CD; padding: 7px 9px; }}
 QPushButton#nav {{ background: transparent; color: #B9CAD8; border: 0; border-radius: 9px; text-align: left; padding: 12px 14px; font-size: 13px; }}
 QPushButton#nav:hover, QPushButton#nav[selected="true"] {{ background: #23445E; color: white; }}
 QLineEdit, QComboBox {{ background: white; border: 1px solid {PALETTE['line']}; border-radius: 9px; padding: 10px 11px; min-height: 18px; }}
@@ -449,6 +450,7 @@ QLineEdit, QComboBox, QTableWidget {{ background: #182A39; color: #E6EEF5; borde
 QHeaderView::section {{ background: #203444; color: #B8C8D4; border-color: #294052; }}
 QPushButton {{ background: #203444; color: #E6EEF5; border-color: #294052; }}
 QPushButton#primary {{ background: {PALETTE['blue']}; color: white; }}
+QPushButton#danger {{ color: #F2A0A4; background: #43282D; border-color: #613A3F; }}
 QTableWidget {{ selection-background-color: #254966; selection-color: white; }}
 QTableWidget::item {{ border-bottom-color: #223746; }}
 QTableWidget::item:alternate {{ background: #152533; }}
@@ -625,7 +627,7 @@ class TanksPage(QWidget):
         for text,detail,color in [("0 connected","All network tanks",PALETTE["blue"]),("0% average","Network fill level",PALETTE["green"]),("0 critical","Immediate follow-up",PALETTE["red"])]:
             f=card(); l=QVBoxLayout(f); l.setContentsMargins(15,12,15,12); v=label(text); v.setStyleSheet(f"font-size:17px;font-weight:700;color:{color};"); l.addWidget(v); l.addWidget(label(detail,"muted")); summary.addWidget(f); self.summary_values.append(v)
         root.addLayout(summary)
-        self.table=QTableWidget(0,7); self.table.setHorizontalHeaderLabels(["TANK / COMMUNITY","LEVEL","CAPACITY","FLOW","VALVE","STATUS","ACTIONS"]); self.table.verticalHeader().setVisible(False); self.table.setShowGrid(False); self.table.setAlternatingRowColors(True); self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows); self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.table.setWordWrap(False); self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter); self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch); self.table.horizontalHeader().setSectionResizeMode(6,QHeaderView.ResizeMode.ResizeToContents)
+        self.table=QTableWidget(0,7); self.table.setHorizontalHeaderLabels(["TANK / COMMUNITY","LEVEL","CAPACITY","FLOW","VALVE","STATUS","ACTIONS"]); self.table.verticalHeader().setVisible(False); self.table.setShowGrid(False); self.table.setAlternatingRowColors(True); self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows); self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.table.setWordWrap(False); self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter); self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch); self.table.horizontalHeader().setSectionResizeMode(6,QHeaderView.ResizeMode.Fixed); self.table.horizontalHeader().resizeSection(6,164)
         root.addWidget(self.table,1); self.search.textChanged.connect(self.refresh); self.filter.currentTextChanged.connect(self.refresh); self.refresh()
 
     def refresh(self):
@@ -638,7 +640,7 @@ class TanksPage(QWidget):
             bar=QWidget(); bl=QVBoxLayout(bar); bl.setContentsMargins(8,10,8,10); pct=label(f"{t.percentage}%"); pct.setStyleSheet(f"color:{PALETTE['red'] if t.percentage<30 else PALETTE['orange'] if t.percentage<50 else PALETTE['green']};font-weight:700;"); bl.addWidget(pct); self.table.setCellWidget(r,1,bar)
             self.table.setItem(r,2,QTableWidgetItem(f"{t.capacity:,} L")); self.table.setItem(r,3,QTableWidgetItem(f"{t.flow:g} L/min")); self.table.setItem(r,4,QTableWidgetItem("●  "+t.valve))
             badge=QLabel("  "+t.status+"  "); color=PALETTE["green"] if t.status=="Normal" else PALETTE["orange"] if t.status=="Warning" else PALETTE["red"]; badge.setStyleSheet(f"color:{color};background:#18{color[1:]};border-radius:8px;padding:5px;font-weight:600;"); badge.setAlignment(Qt.AlignmentFlag.AlignCenter); self.table.setCellWidget(r,5,badge)
-            actions=QWidget(); ar=QHBoxLayout(actions); ar.setContentsMargins(2,4,2,4); edit=QPushButton("Edit"); delete=QPushButton("Delete"); edit.clicked.connect(lambda checked=False,x=t:self.edit_tank(x)); delete.clicked.connect(lambda checked=False,x=t:self.delete_tank(x)); ar.addWidget(edit); ar.addWidget(delete); self.table.setCellWidget(r,6,actions); self.table.setRowHeight(r,62)
+            actions=QWidget(); ar=QHBoxLayout(actions); ar.setContentsMargins(3,4,3,4); ar.setSpacing(5); edit=QPushButton("Edit"); delete=QPushButton("Delete"); edit.setMinimumWidth(56); delete.setMinimumWidth(72); delete.setObjectName("danger"); edit.clicked.connect(lambda checked=False,x=t:self.edit_tank(x)); delete.clicked.connect(lambda checked=False,x=t:self.delete_tank(x)); ar.addWidget(edit); ar.addWidget(delete); self.table.setCellWidget(r,6,actions); self.table.setRowHeight(r,62)
 
     def add_tank(self):
         dlg=TankDialog(self.repo.communities())
@@ -652,7 +654,8 @@ class TanksPage(QWidget):
             except Exception as exc: QMessageBox.warning(self,"Could not save tank",str(exc))
     def delete_tank(self,tank):
         if QMessageBox.question(self,"Delete tank",f"Delete {tank.name}? This action cannot be undone.")==QMessageBox.StandardButton.Yes:
-            self.repo.delete_tank(tank.asset_id); self.refresh(); self.changed()
+            try: self.repo.delete_tank(tank.asset_id); self.refresh(); self.changed()
+            except Exception as exc: QMessageBox.critical(self,"Delete failed",str(exc))
 
 
 class CommunityDialog(QDialog):
@@ -683,7 +686,7 @@ class CommunityPage(QWidget):
         self.search=QLineEdit(); self.search.setPlaceholderText("Search communities…"); self.search.setMaximumWidth(260); top.addWidget(self.search)
         add=make_button("＋  Add community",True); add.clicked.connect(self.add_community); top.addWidget(add); root.addLayout(top)
         frame=card(); layout=QVBoxLayout(frame); layout.setContentsMargins(8,8,8,8)
-        self.table=QTableWidget(0,5); self.table.setHorizontalHeaderLabels(["COMMUNITY","LOCATION","TANKS","HOUSEHOLDS","ACTIONS"]); self.table.verticalHeader().setVisible(False); self.table.setShowGrid(False); self.table.setAlternatingRowColors(True); self.table.setWordWrap(False); self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter); self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch); self.table.horizontalHeader().setSectionResizeMode(4,QHeaderView.ResizeMode.ResizeToContents); layout.addWidget(self.table); root.addWidget(frame,1)
+        self.table=QTableWidget(0,5); self.table.setHorizontalHeaderLabels(["COMMUNITY","LOCATION","TANKS","HOUSEHOLDS","ACTIONS"]); self.table.verticalHeader().setVisible(False); self.table.setShowGrid(False); self.table.setAlternatingRowColors(True); self.table.setWordWrap(False); self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter); self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch); self.table.horizontalHeader().setSectionResizeMode(4,QHeaderView.ResizeMode.Fixed); self.table.horizontalHeader().resizeSection(4,164); layout.addWidget(self.table); root.addWidget(frame,1)
         self.search.textChanged.connect(self._filter); self.refresh()
     def refresh(self):
         communities=self.repo.communities(); self.table.setRowCount(len(communities))
@@ -691,7 +694,7 @@ class CommunityPage(QWidget):
             values=[item.name,item.location,str(item.tanks),f"{item.households:,}"]
             for col,value in enumerate(values): self.table.setItem(row,col,QTableWidgetItem(value))
             cell=QWidget(); cell_layout=QHBoxLayout(cell); cell_layout.setContentsMargins(4,4,4,4); cell_layout.setSpacing(6)
-            edit=QPushButton("Edit"); delete=QPushButton("Delete"); edit.clicked.connect(lambda checked=False,c=item:self.edit_community(c)); delete.clicked.connect(lambda checked=False,c=item:self.delete_community(c)); cell_layout.addWidget(edit); cell_layout.addWidget(delete); self.table.setCellWidget(row,4,cell); self.table.setRowHeight(row,56)
+            edit=QPushButton("Edit"); delete=QPushButton("Delete"); edit.setMinimumWidth(56); delete.setMinimumWidth(72); delete.setObjectName("danger"); edit.clicked.connect(lambda checked=False,c=item:self.edit_community(c)); delete.clicked.connect(lambda checked=False,c=item:self.delete_community(c)); cell_layout.addWidget(edit); cell_layout.addWidget(delete); self.table.setCellWidget(row,4,cell); self.table.setRowHeight(row,56)
         self._filter(self.search.text())
     def _filter(self,query):
         query=query.casefold()
@@ -789,7 +792,7 @@ class GenericPage(QWidget):
         self.table.verticalHeader().setVisible(False); self.table.setShowGrid(False); self.table.setAlternatingRowColors(True); self.table.setWordWrap(False); self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows); self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(len(headers),QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(len(headers),QHeaderView.ResizeMode.Fixed); self.table.horizontalHeader().resizeSection(len(headers),164)
         card_layout.addWidget(self.table); root.addWidget(table_card,1)
         self.search.textChanged.connect(self._filter); self.refresh()
     def refresh(self):
@@ -797,8 +800,8 @@ class GenericPage(QWidget):
         for row,(record_id,fields) in enumerate(rows):
             for column,value in enumerate(fields):
                 item=QTableWidgetItem(str(value)); item.setData(Qt.ItemDataRole.UserRole,record_id); self.table.setItem(row,column,item)
-            actions=QWidget(); actions.setObjectName("tableActions"); actions_layout=QHBoxLayout(actions); actions_layout.setContentsMargins(4,4,4,4); actions_layout.setSpacing(6)
-            edit=QPushButton("Edit"); delete=QPushButton("Delete"); edit.clicked.connect(lambda checked=False,i=record_id,f=list(fields):self.edit_record(i,f)); delete.clicked.connect(lambda checked=False,i=record_id:self.delete_record(i)); actions_layout.addWidget(edit); actions_layout.addWidget(delete)
+            actions=QWidget(); actions.setObjectName("tableActions"); actions_layout=QHBoxLayout(actions); actions_layout.setContentsMargins(3,4,3,4); actions_layout.setSpacing(5)
+            edit=QPushButton("Edit"); delete=QPushButton("Delete"); edit.setMinimumWidth(56); delete.setMinimumWidth(72); delete.setObjectName("danger"); edit.clicked.connect(lambda checked=False,i=record_id,f=list(fields):self.edit_record(i,f)); delete.clicked.connect(lambda checked=False,i=record_id:self.delete_record(i)); actions_layout.addWidget(edit); actions_layout.addWidget(delete)
             self.table.setCellWidget(row,len(self.headers),actions); self.table.setRowHeight(row,56)
         self._filter(self.search.text())
     def _filter(self,query):
@@ -907,8 +910,9 @@ class SwimsWindow(QMainWindow):
             self.settings.dark.blockSignals(True); self.settings.dark.setChecked(dark); self.settings.dark.blockSignals(False)
 
 
-def load_local_environment(path: Path = Path(".env")) -> None:
+def load_local_environment(path: Optional[Path] = None) -> None:
     """Read simple KEY=VALUE entries; process-level variables take precedence."""
+    path=path or Path(__file__).resolve().parent/".env"
     if not path.is_file():
         return
     for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
