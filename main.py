@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QSize
@@ -64,12 +64,12 @@ class WaterAsset(ABC):
 class WaterTank(WaterAsset):
     """Tank object; its status and fill level drive the UI indicators."""
 
-    def __init__(self, asset_id: int, code: str, community: str, capacity: int,
-                 level: int, flow: float, valve: str, status: str,
-                 updated: str = "Just now"):
+    def __init__(self, asset_id: int, code: str, community: str, capacity: float,
+                 level: float, flow: float, valve: str, status: str,
+                 updated: str = "Just now", installed: str = ""):
         super().__init__(asset_id, code, community, status)
         self._capacity, self._level = capacity, level
-        self.flow, self.valve, self.updated = flow, valve, updated
+        self.flow, self.valve, self.updated, self.installed = flow, valve, updated, installed
 
     @property
     def capacity(self) -> int:
@@ -86,6 +86,15 @@ class WaterTank(WaterAsset):
     @property
     def percentage(self) -> int:
         return round(self._level * 100 / self._capacity) if self._capacity else 0
+
+    @property
+    def health(self) -> str:
+        state=self.status.upper()
+        if state in ("CRITICAL","FAULT","MAINTENANCE","OUT_OF_SERVICE","INACTIVE"): return "Critical"
+        if state in ("WARNING","LOW_WATER"): return "Warning"
+        if self.percentage < 30: return "Critical"
+        if self.percentage < 50: return "Warning"
+        return "Normal"
 
     def summary(self) -> str:
         return f"{self.name} · {self.community} · {self.percentage}% full"
@@ -132,35 +141,43 @@ class Community:
 
 
 RECORD_SCHEMAS = {
-    "sensors": ("Sensor ID", "Type", "Tank / location", "Current reading", "Status"),
-    "transactions": ("Reference", "Tank", "Type", "Volume (L)", "Date & time"),
-    "equipment": ("Asset ID", "Equipment name", "Type / location", "Status", "Installed"),
-    "maintenance": ("Task", "Asset", "Technician", "Status", "Date"),
-    "technicians": ("Name", "Phone", "Email", "Specialization", "Assignment"),
+    "sensors": ("Sensor code", "Sensor type", "Tank code", "Latest reading (value + unit)", "Status"),
+    "transactions": ("Tank code", "Transaction type", "Volume (L)", "Transaction date/time", "Level after (L)"),
+    "equipment": ("Equipment name", "Equipment type", "Tank code", "Status", "Installation date"),
+    "maintenance": ("Maintenance type", "Equipment name", "Technician name", "Status", "Date", "Notes"),
+    "technicians": ("First name", "Last name", "Phone number", "Email", "Specialization"),
+    "valves": ("Valve code", "Tank code", "Valve status", "Installation date"),
 }
 
 SEED_RECORDS = {
     "sensors": [
-        ["SEN-UL-001", "Ultrasonic level", "TNK-001 · Brookside", "2.04 m", "Online"],
-        ["SEN-FL-002", "Flow meter", "TNK-002 · Hillview", "9.2 L/min", "Online"],
-        ["SEN-UL-003", "Ultrasonic level", "TNK-003 · Riverside", "0.83 m", "Warning"],
+        ["SEN-UL-001", "Ultrasonic", "TNK-001", "2.04 m", "ACTIVE"],
+        ["SEN-FL-002", "Flow", "TNK-002", "9.2 L/min", "ACTIVE"],
+        ["SEN-UL-003", "Ultrasonic", "TNK-003", "0.83 m", "WARNING"],
     ],
     "transactions": [
-        ["TRX-2081", "TNK-001", "Inflow", "2400", "Today · 09:42"],
-        ["TRX-2080", "TNK-002", "Usage", "840", "Today · 09:30"],
+        ["TNK-001", "INFLOW", "2400", "2026-11-22 09:42", "20400"],
+        ["TNK-002", "USAGE", "840", "2026-11-22 09:30", "6840"],
     ],
     "equipment": [
-        ["PMP-001", "Booster pump", "TNK-001 · Brookside", "Operational", "12 Jun 2025"],
-        ["VLV-003", "Control valve", "TNK-003 · Riverside", "Maintenance required", "08 Mar 2025"],
+        ["Booster pump", "Pump", "TNK-001", "OPERATIONAL", "2025-06-12"],
+        ["Control valve", "Valve", "TNK-003", "MAINTENANCE", "2025-03-08"],
     ],
     "maintenance": [
-        ["Pump inspection", "PMP-001 · Brookside", "Joseph Kamara", "In progress", "Today"],
-        ["Valve replacement", "VLV-003 · Riverside", "Mariama Sesay", "Scheduled", "24 Nov 2026"],
+        ["Pump inspection", "Booster pump", "Joseph Kamara", "In progress", "2026-11-22", "Routine check"],
+        ["Valve replacement", "Control valve", "Mariama Sesay", "Scheduled", "2026-11-24", "Replace worn valve"],
     ],
     "technicians": [
-        ["Joseph Kamara", "+232 76 555 018", "j.kamara@swims.gov.sl", "Pumps & motors", "2 active tasks"],
-        ["Mariama Sesay", "+232 77 210 044", "m.sesay@swims.gov.sl", "Valves & controls", "1 active task"],
+        ["Joseph", "Kamara", "+232 76 555 018", "j.kamara@swims.gov.sl", "Pumps & motors"],
+        ["Mariama", "Sesay", "+232 77 210 044", "m.sesay@swims.gov.sl", "Valves & controls"],
     ],
+    "valves": [["VL-001","TNK-001","OPEN","2025-06-12"]],
+}
+
+REQUIRED_RECORD_FIELDS = {
+    "sensors": (0,1,2,3,4), "transactions": (0,1,2,3),
+    "equipment": (0,1,2,3), "maintenance": (0,1,2,3,4),
+    "technicians": (0,1), "valves": (0,1,2),
 }
 
 
@@ -259,11 +276,9 @@ class DemoRepository(AssetRepository):
 
     def delete_community(self, community_id: int) -> None:
         deleted = next((item for item in self._communities if item.community_id == community_id), None)
+        if deleted and any(tank.community==deleted.name for tank in self._tanks):
+            raise ValueError("This community still has tanks. Reassign or remove its tanks first.")
         self._communities = [item for item in self._communities if item.community_id != community_id]
-        if deleted:
-            for tank in self._tanks:
-                if tank.community == deleted.name:
-                    tank._community = "Unassigned"
 
     def resolve_alert(self, alert_id: int) -> None:
         for alert in self._alerts:
@@ -298,112 +313,236 @@ class PostgresRepository(AssetRepository):
             raise RuntimeError("Install dependencies with: pip install -r requirements.txt") from exc
         self._db = psycopg2.connect(dsn) if isinstance(dsn,str) else psycopg2.connect(**dsn)
         self._db.autocommit = True
-        self._setup()
+        self._validate_schema()
 
-    def _setup(self) -> None:
+    def _validate_schema(self) -> None:
         with self._db.cursor() as cur:
-            cur.execute("""CREATE TABLE IF NOT EXISTS communities (
-                id SERIAL PRIMARY KEY, name TEXT UNIQUE NOT NULL, location TEXT NOT NULL,
-                households INTEGER NOT NULL DEFAULT 0)""")
-            cur.execute("""CREATE TABLE IF NOT EXISTS tanks (
-                id SERIAL PRIMARY KEY, code TEXT UNIQUE NOT NULL,
-                community_id INTEGER REFERENCES communities(id) ON DELETE SET NULL,
-                capacity_l INTEGER NOT NULL CHECK(capacity_l > 0), level_l INTEGER NOT NULL DEFAULT 0,
-                flow_lpm NUMERIC(8,2) NOT NULL DEFAULT 0, valve TEXT NOT NULL DEFAULT 'Open',
-                status TEXT NOT NULL DEFAULT 'Normal', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
-            cur.execute("""CREATE TABLE IF NOT EXISTS alerts (
-                id SERIAL PRIMARY KEY, title TEXT NOT NULL, tank_code TEXT NOT NULL,
-                severity TEXT NOT NULL, detail TEXT NOT NULL, resolved BOOLEAN NOT NULL DEFAULT FALSE,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
-            cur.execute("""CREATE TABLE IF NOT EXISTS swims_records (
-                id SERIAL PRIMARY KEY, category TEXT NOT NULL,
-                data JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
-            cur.execute("SELECT COUNT(*) FROM communities")
-            if cur.fetchone()[0] == 0:
-                cur.execute("""INSERT INTO communities(name,location,households) VALUES
-                    ('Brookside','Western Area · Freetown',1240),
-                    ('Hillview','Waterloo · Western Area',860),
-                    ('Riverside','Bo District',1540),
-                    ('Eastbank','Kenema District',690)""")
+            cur.execute("""SELECT table_name,column_name FROM information_schema.columns
+                WHERE table_schema='public'""")
+            available={}
+            for table,column in cur.fetchall(): available.setdefault(table,set()).add(column)
+            required={
+                "communities":{"community_id","community_name","household_count","location"},
+                "water_tanks":{"tank_id","community_id","tank_code","capacity_litres","current_level","installation_date","status"},
+                "sensors":{"sensor_id","tank_id","sensor_code","sensor_type","status"},
+                "sensor_readings":{"reading_id","sensor_id","reading_value","reading_unit","reading_time"},
+                "valves":{"valve_id","tank_id","valve_code","valve_status","installation_date"},
+                "water_transactions":{"transaction_id","tank_id","transaction_type","litres","transaction_date","level_after"},
+                "equipment":{"equipment_id","tank_id","equipment_name","equipment_type","installation_date","status"},
+                "maintenance":{"maintenance_id","technician_id","equipment_id","maintenance_type","maintenance_date","notes"},
+                "technicians":{"technician_id","first_name","last_name","phone_number","email","specialisation"},
+                "alerts":{"alert_id","tank_id","alert_type","alert_message","alert_date","resolved"},
+            }
+            missing=[f"{table}.{column}" for table,columns in required.items() for column in columns if column not in available.get(table,set())]
+            if missing:
+                raise RuntimeError("The configured database does not match the SWIMS schema. Missing: " + ", ".join(missing))
+            # The brief tracks task status; the restored maintenance table did not include it.
+            cur.execute("ALTER TABLE maintenance ADD COLUMN IF NOT EXISTS status VARCHAR(30) NOT NULL DEFAULT 'Scheduled'")
 
     def tanks(self) -> list[WaterTank]:
         with self._db.cursor() as cur:
-            cur.execute("""SELECT t.id,t.code,COALESCE(c.name,'Unassigned'),t.capacity_l,t.level_l,
-                t.flow_lpm,t.valve,t.status,t.updated_at FROM tanks t LEFT JOIN communities c ON c.id=t.community_id ORDER BY t.code""")
-            return [WaterTank(i, code, community, capacity, level, float(flow), valve, status,
-                              stamp.strftime('%H:%M') if stamp else '—')
-                    for i, code, community, capacity, level, flow, valve, status, stamp in cur.fetchall()]
+            cur.execute("""SELECT w.tank_id,w.tank_code,c.community_name,w.capacity_litres,w.current_level,
+                COALESCE((SELECT r.reading_value FROM sensor_readings r JOIN sensors s USING(sensor_id)
+                    WHERE s.tank_id=w.tank_id AND LOWER(s.sensor_type)='flow' ORDER BY r.reading_time DESC LIMIT 1),0),
+                COALESCE((SELECT v.valve_status FROM valves v WHERE v.tank_id=w.tank_id LIMIT 1),'UNKNOWN'),
+                w.status,COALESCE((SELECT TO_CHAR(MAX(r.reading_time),'HH24:MI') FROM sensor_readings r
+                    JOIN sensors s USING(sensor_id) WHERE s.tank_id=w.tank_id),'—'),w.installation_date
+                FROM water_tanks w JOIN communities c USING(community_id) ORDER BY w.tank_code""")
+            return [WaterTank(i,code,community,float(capacity),float(level),float(flow),valve,status,updated,
+                              installed.isoformat() if installed else "")
+                    for i,code,community,capacity,level,flow,valve,status,updated,installed in cur.fetchall()]
 
     def communities(self) -> list[Community]:
         with self._db.cursor() as cur:
-            cur.execute("""SELECT c.id,c.name,c.location,COUNT(t.id),c.households FROM communities c
-                LEFT JOIN tanks t ON t.community_id=c.id GROUP BY c.id ORDER BY c.name""")
+            cur.execute("""SELECT c.community_id,c.community_name,c.location,COUNT(t.tank_id),c.household_count
+                FROM communities c LEFT JOIN water_tanks t USING(community_id)
+                GROUP BY c.community_id ORDER BY c.community_name""")
             return [Community(*row) for row in cur.fetchall()]
 
     def alerts(self) -> list[Alert]:
         with self._db.cursor() as cur:
-            cur.execute("SELECT id,title,tank_code,severity,created_at,detail,resolved FROM alerts ORDER BY created_at DESC")
-            return [Alert(i, title, tank, severity, stamp.strftime('%H:%M'), detail, resolved)
-                    for i, title, tank, severity, stamp, detail, resolved in cur.fetchall()]
+            cur.execute("""SELECT a.alert_id,a.alert_type,w.tank_code,a.alert_date,a.alert_message,a.resolved
+                FROM alerts a JOIN water_tanks w USING(tank_id) ORDER BY a.alert_date DESC""")
+            result=[]
+            for alert_id,kind,tank,stamp,detail,resolved in cur.fetchall():
+                normalized=kind.replace("_"," ").title(); upper=kind.upper()
+                severity="Critical" if any(word in upper for word in ("FAIL","MAINTENANCE","OVERFLOW")) else "Warning" if any(word in upper for word in ("LOW","ANOMALY","USAGE")) else "Info"
+                result.append(Alert(alert_id,normalized,tank,severity,stamp.strftime('%Y-%m-%d %H:%M'),detail,resolved))
+            return result
 
     def save_tank(self, tank: WaterTank) -> WaterTank:
         with self._db.cursor() as cur:
-            cur.execute("SELECT id FROM communities WHERE name=%s", (tank.community,))
+            cur.execute("SELECT community_id FROM communities WHERE community_name=%s", (tank.community,))
             row = cur.fetchone()
-            community_id = row[0] if row else None
+            if not row: raise ValueError(f"Community '{tank.community}' does not exist.")
+            community_id = row[0]
             if tank.asset_id:
-                cur.execute("""UPDATE tanks SET code=%s,community_id=%s,capacity_l=%s,level_l=%s,
-                    flow_lpm=%s,valve=%s,status=%s,updated_at=NOW() WHERE id=%s""",
-                    (tank.name, community_id, tank.capacity, tank.level, tank.flow, tank.valve, tank.status, tank.asset_id))
+                cur.execute("""UPDATE water_tanks SET tank_code=%s,community_id=%s,capacity_litres=%s,
+                    current_level=%s,status=%s,installation_date=%s WHERE tank_id=%s""",
+                    (tank.name,community_id,tank.capacity,tank.level,tank.status,date.fromisoformat(tank.installed) if tank.installed else None,tank.asset_id))
                 if cur.rowcount:
                     return tank
-            cur.execute("""INSERT INTO tanks(code,community_id,capacity_l,level_l,flow_lpm,valve,status)
-                VALUES(%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
-                (tank.name, community_id, tank.capacity, tank.level, tank.flow, tank.valve, tank.status))
+            cur.execute("""INSERT INTO water_tanks(tank_code,community_id,capacity_litres,current_level,status,installation_date)
+                VALUES(%s,%s,%s,%s,%s,%s) RETURNING tank_id""",
+                (tank.name,community_id,tank.capacity,tank.level,tank.status,date.fromisoformat(tank.installed) if tank.installed else None))
             tank._asset_id = cur.fetchone()[0]
         return tank
 
     def delete_tank(self, tank_id: int) -> None:
-        with self._db.cursor() as cur: cur.execute("DELETE FROM tanks WHERE id=%s", (tank_id,))
+        owns_transaction=self._db.autocommit
+        if owns_transaction: self._db.autocommit=False
+        try:
+            with self._db.cursor() as cur:
+                cur.execute("DELETE FROM maintenance WHERE equipment_id IN (SELECT equipment_id FROM equipment WHERE tank_id=%s)",(tank_id,))
+                cur.execute("DELETE FROM equipment WHERE tank_id=%s",(tank_id,))
+                cur.execute("DELETE FROM sensor_readings WHERE sensor_id IN (SELECT sensor_id FROM sensors WHERE tank_id=%s)",(tank_id,))
+                cur.execute("DELETE FROM sensors WHERE tank_id=%s",(tank_id,))
+                cur.execute("DELETE FROM valves WHERE tank_id=%s",(tank_id,))
+                cur.execute("DELETE FROM water_transactions WHERE tank_id=%s",(tank_id,))
+                cur.execute("DELETE FROM alerts WHERE tank_id=%s",(tank_id,))
+                cur.execute("DELETE FROM water_tanks WHERE tank_id=%s",(tank_id,))
+            if owns_transaction: self._db.commit()
+        except Exception:
+            if owns_transaction: self._db.rollback()
+            raise
+        finally:
+            if owns_transaction: self._db.autocommit=True
 
     def save_community(self, community: Community) -> Community:
         with self._db.cursor() as cur:
             if community.community_id:
-                cur.execute("UPDATE communities SET name=%s,location=%s,households=%s WHERE id=%s",
-                            (community.name, community.location, community.households, community.community_id))
+                cur.execute("UPDATE communities SET community_name=%s,location=%s,household_count=%s WHERE community_id=%s",
+                            (community.name,community.location,community.households,community.community_id))
                 if cur.rowcount:
                     return community
-            cur.execute("INSERT INTO communities(name,location,households) VALUES(%s,%s,%s) RETURNING id",
-                        (community.name, community.location, community.households))
+            cur.execute("INSERT INTO communities(community_name,location,household_count) VALUES(%s,%s,%s) RETURNING community_id",
+                        (community.name,community.location,community.households))
             community.community_id = cur.fetchone()[0]
         return community
 
     def delete_community(self, community_id: int) -> None:
-        with self._db.cursor() as cur: cur.execute("DELETE FROM communities WHERE id=%s", (community_id,))
+        with self._db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM water_tanks WHERE community_id=%s",(community_id,))
+            if cur.fetchone()[0]: raise ValueError("This community still has tanks. Reassign or remove its tanks first.")
+            cur.execute("DELETE FROM communities WHERE community_id=%s",(community_id,))
 
     def resolve_alert(self, alert_id: int) -> None:
-        with self._db.cursor() as cur: cur.execute("UPDATE alerts SET resolved=TRUE WHERE id=%s", (alert_id,))
+        with self._db.cursor() as cur: cur.execute("UPDATE alerts SET resolved=TRUE WHERE alert_id=%s", (alert_id,))
 
     def records(self, category: str) -> list[tuple[int, list[str]]]:
         with self._db.cursor() as cur:
-            cur.execute("SELECT id,data FROM swims_records WHERE category=%s ORDER BY id", (category,))
-            return [(record_id, [str(value) for value in data]) for record_id, data in cur.fetchall()]
+            if category=="sensors":
+                cur.execute("""SELECT s.sensor_id,s.sensor_code,s.sensor_type,w.tank_code,
+                    COALESCE(r.reading_value::text || ' ' || r.reading_unit,''),COALESCE(s.status,'UNKNOWN')
+                    FROM sensors s JOIN water_tanks w USING(tank_id)
+                    LEFT JOIN LATERAL (SELECT reading_value,reading_unit FROM sensor_readings
+                        WHERE sensor_id=s.sensor_id ORDER BY reading_time DESC LIMIT 1) r ON TRUE ORDER BY s.sensor_id""")
+            elif category=="transactions":
+                cur.execute("""SELECT t.transaction_id,w.tank_code,t.transaction_type,t.litres::text,
+                    t.transaction_date,t.level_after::text FROM water_transactions t JOIN water_tanks w USING(tank_id)
+                    ORDER BY t.transaction_date DESC""")
+            elif category=="equipment":
+                cur.execute("""SELECT e.equipment_id,e.equipment_name,e.equipment_type,w.tank_code,
+                    COALESCE(e.status,'UNKNOWN'),COALESCE(e.installation_date::text,'')
+                    FROM equipment e JOIN water_tanks w USING(tank_id) ORDER BY e.equipment_id""")
+            elif category=="maintenance":
+                cur.execute("""SELECT m.maintenance_id,m.maintenance_type,e.equipment_name,
+                    t.first_name || ' ' || t.last_name,m.status,m.maintenance_date::text,COALESCE(m.notes,'')
+                    FROM maintenance m JOIN equipment e USING(equipment_id)
+                    JOIN technicians t USING(technician_id) ORDER BY m.maintenance_date DESC""")
+            elif category=="technicians":
+                cur.execute("""SELECT technician_id,first_name,last_name,COALESCE(phone_number,''),
+                    COALESCE(email,''),COALESCE(specialisation,'') FROM technicians ORDER BY last_name,first_name""")
+            elif category=="valves":
+                cur.execute("""SELECT v.valve_id,v.valve_code,w.tank_code,v.valve_status,
+                    COALESCE(v.installation_date::text,'') FROM valves v JOIN water_tanks w USING(tank_id) ORDER BY v.valve_id""")
+            else:
+                raise ValueError(f"Unsupported database records category: {category}")
+            rows=[]
+            for row in cur.fetchall():
+                record_id,*fields=row
+                fields=[value.isoformat(sep=" ") if isinstance(value,datetime) else "" if value is None else str(value) for value in fields]
+                rows.append((record_id,fields))
+            return rows
 
     def save_record(self, category: str, record_id: int, fields: list[str]) -> int:
-        from psycopg2.extras import Json
-        with self._db.cursor() as cur:
+        def tank_id(cur,code):
+            cur.execute("SELECT tank_id FROM water_tanks WHERE tank_code=%s",(code.strip(),)); row=cur.fetchone()
+            if not row: raise ValueError(f"Tank '{code}' does not exist.")
+            return row[0]
+        def save_sensor(cur):
+            code,sensor_type,tank_code,reading,status=fields; target=tank_id(cur,tank_code)
+            parts=reading.strip().split(maxsplit=1)
+            if len(parts)!=2: raise ValueError("Enter the reading as a number and unit, for example 84 % or 12 L/min.")
+            try: numeric=float(parts[0])
+            except ValueError as exc: raise ValueError("Sensor reading must start with a number.") from exc
             if record_id:
-                cur.execute("UPDATE swims_records SET data=%s,updated_at=NOW() WHERE category=%s AND id=%s",
-                            (Json(fields), category, record_id))
-                if cur.rowcount:
-                    return record_id
-            cur.execute("INSERT INTO swims_records(category,data) VALUES(%s,%s) RETURNING id",
-                        (category, Json(fields)))
-            return cur.fetchone()[0]
+                cur.execute("UPDATE sensors SET sensor_code=%s,sensor_type=%s,tank_id=%s,status=%s WHERE sensor_id=%s",(code,sensor_type,target,status,record_id))
+                if not cur.rowcount: raise ValueError("Sensor no longer exists. Refresh and try again.")
+                sensor_id=record_id
+            else:
+                cur.execute("INSERT INTO sensors(sensor_code,sensor_type,tank_id,status) VALUES(%s,%s,%s,%s) RETURNING sensor_id",(code,sensor_type,target,status)); sensor_id=cur.fetchone()[0]
+            cur.execute("INSERT INTO sensor_readings(sensor_id,reading_value,reading_unit,reading_time,status) VALUES(%s,%s,%s,NOW(),%s)",(sensor_id,numeric,parts[1],status))
+            return sensor_id
+        with self._db.cursor() as cur:
+            if category=="sensors": return save_sensor(cur)
+            if category=="transactions":
+                tank_code,kind,litres,stamp,level_after=fields; target=tank_id(cur,tank_code)
+                if record_id:
+                    cur.execute("UPDATE water_transactions SET tank_id=%s,transaction_type=%s,litres=%s,transaction_date=%s,level_after=%s WHERE transaction_id=%s",
+                                (target,kind,litres,datetime.fromisoformat(stamp),level_after or None,record_id))
+                    if cur.rowcount: return record_id
+                cur.execute("INSERT INTO water_transactions(tank_id,transaction_type,litres,transaction_date,level_after) VALUES(%s,%s,%s,%s,%s) RETURNING transaction_id",
+                            (target,kind,litres,datetime.fromisoformat(stamp),level_after or None)); return cur.fetchone()[0]
+            if category=="equipment":
+                name,kind,code,status,installed=fields; target=tank_id(cur,code); installation=date.fromisoformat(installed) if installed else None
+                if record_id:
+                    cur.execute("UPDATE equipment SET equipment_name=%s,equipment_type=%s,tank_id=%s,status=%s,installation_date=%s WHERE equipment_id=%s",
+                                (name,kind,target,status,installation,record_id))
+                    if cur.rowcount: return record_id
+                cur.execute("INSERT INTO equipment(equipment_name,equipment_type,tank_id,status,installation_date) VALUES(%s,%s,%s,%s,%s) RETURNING equipment_id",
+                            (name,kind,target,status,installation)); return cur.fetchone()[0]
+            if category=="maintenance":
+                kind,equipment_name,technician_name,status,stamp,notes=fields
+                cur.execute("SELECT equipment_id FROM equipment WHERE equipment_name=%s ORDER BY equipment_id LIMIT 1",(equipment_name,)); e=cur.fetchone()
+                if not e: raise ValueError(f"Equipment '{equipment_name}' does not exist.")
+                cur.execute("SELECT technician_id FROM technicians WHERE first_name || ' ' || last_name=%s ORDER BY technician_id LIMIT 1",(technician_name,)); t=cur.fetchone()
+                if not t: raise ValueError(f"Technician '{technician_name}' does not exist.")
+                values=(t[0],e[0],kind,date.fromisoformat(stamp),notes,status)
+                if record_id:
+                    cur.execute("UPDATE maintenance SET technician_id=%s,equipment_id=%s,maintenance_type=%s,maintenance_date=%s,notes=%s,status=%s WHERE maintenance_id=%s",(*values,record_id))
+                    if cur.rowcount: return record_id
+                cur.execute("INSERT INTO maintenance(technician_id,equipment_id,maintenance_type,maintenance_date,notes,status) VALUES(%s,%s,%s,%s,%s,%s) RETURNING maintenance_id",values); return cur.fetchone()[0]
+            if category=="technicians":
+                first,last,phone,email,speciality=fields; values=(first,last,phone or None,email or None,speciality or None)
+                if record_id:
+                    cur.execute("UPDATE technicians SET first_name=%s,last_name=%s,phone_number=%s,email=%s,specialisation=%s WHERE technician_id=%s",(*values,record_id))
+                    if cur.rowcount: return record_id
+                cur.execute("INSERT INTO technicians(first_name,last_name,phone_number,email,specialisation) VALUES(%s,%s,%s,%s,%s) RETURNING technician_id",values); return cur.fetchone()[0]
+            if category=="valves":
+                code,tank_code,status,installed=fields; target=tank_id(cur,tank_code); installation=date.fromisoformat(installed) if installed else None
+                if record_id:
+                    cur.execute("UPDATE valves SET valve_code=%s,tank_id=%s,valve_status=%s,installation_date=%s WHERE valve_id=%s",(code,target,status,installation,record_id))
+                    if cur.rowcount: return record_id
+                cur.execute("INSERT INTO valves(valve_code,tank_id,valve_status,installation_date) VALUES(%s,%s,%s,%s) RETURNING valve_id",(code,target,status,installation)); return cur.fetchone()[0]
+            raise ValueError(f"Unsupported database records category: {category}")
 
     def delete_record(self, category: str, record_id: int) -> None:
         with self._db.cursor() as cur:
-            cur.execute("DELETE FROM swims_records WHERE category=%s AND id=%s", (category, record_id))
+            if category=="sensors":
+                cur.execute("DELETE FROM sensor_readings WHERE sensor_id=%s",(record_id,)); cur.execute("DELETE FROM sensors WHERE sensor_id=%s",(record_id,))
+            elif category=="equipment":
+                cur.execute("SELECT COUNT(*) FROM maintenance WHERE equipment_id=%s",(record_id,))
+                if cur.fetchone()[0]: raise ValueError("This equipment has maintenance history. Delete or reassign those tasks first.")
+                cur.execute("DELETE FROM equipment WHERE equipment_id=%s",(record_id,))
+            elif category=="maintenance": cur.execute("DELETE FROM maintenance WHERE maintenance_id=%s",(record_id,))
+            elif category=="technicians":
+                cur.execute("SELECT COUNT(*) FROM maintenance WHERE technician_id=%s",(record_id,))
+                if cur.fetchone()[0]: raise ValueError("This technician has maintenance history. Reassign those tasks before deleting the technician.")
+                cur.execute("DELETE FROM technicians WHERE technician_id=%s",(record_id,))
+            elif category=="transactions": cur.execute("DELETE FROM water_transactions WHERE transaction_id=%s",(record_id,))
+            elif category=="valves": cur.execute("DELETE FROM valves WHERE valve_id=%s",(record_id,))
+            else: raise ValueError(f"Unsupported database records category: {category}")
 
 
 # --------------------------------- Styling ---------------------------------
@@ -414,7 +553,7 @@ PALETTE = {
 }
 
 APP_STYLE = f"""
-QWidget {{ font-family: 'Segoe UI', 'Inter', sans-serif; color: {PALETTE['ink']}; font-size: 13px; }}
+QWidget {{ font-family: 'Segoe UI'; color: {PALETTE['ink']}; font-size: 13px; }}
 QMainWindow, QDialog {{ background: {PALETTE['canvas']}; }}
 QFrame#sidebar {{ background: {PALETTE['navy']}; border: none; }}
 QFrame#card {{ background: white; border: 1px solid {PALETTE['line']}; border-radius: 14px; }}
@@ -469,6 +608,11 @@ def label(text: str, name: str = "") -> QLabel:
     return result
 
 
+def format_litres(value: float) -> str:
+    number=float(value)
+    return f"{number:,.0f}" if number.is_integer() else f"{number:,.2f}"
+
+
 def section_heading(title: str, subtitle: str = "") -> QWidget:
     box = QWidget(); lay = QVBoxLayout(box); lay.setContentsMargins(0, 0, 0, 2); lay.setSpacing(3)
     lay.addWidget(label(title, "sectionTitle"))
@@ -492,7 +636,7 @@ class DonutChart(QWidget):
         p = QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = self.rect().adjusted(18, 18, -18, -18)
         p.setPen(QPen(QColor("#EAF0F4"), 16, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)); p.drawArc(rect, 0, 360 * 16)
-        counts=[sum(t.status==status for t in self.tanks) for status in ("Normal","Warning","Critical")]
+        counts=[sum(t.health==status for t in self.tanks) for status in ("Normal","Warning","Critical")]
         total=max(sum(counts),1); segments=[(round(count/total*360),color) for count,color in zip(counts,(PALETTE["green"],PALETTE["orange"],PALETTE["red"]))]
         start = 90 * 16
         for degrees, color in segments:
@@ -525,29 +669,31 @@ class UsageChart(QWidget):
 
 
 class TankDialog(QDialog):
-    def __init__(self, communities: list[Community], tank: Optional[WaterTank] = None):
-        super().__init__(); self.setWindowTitle("Tank details"); self.setMinimumWidth(400); self.tank_id = tank.asset_id if tank else 0
+    def __init__(self, communities: list[Community], status_options: list[str], tank: Optional[WaterTank] = None):
+        super().__init__(); self.setWindowTitle("Tank details"); self.setMinimumWidth(440); self.tank_id = tank.asset_id if tank else 0; self.current_tank=tank
         layout = QVBoxLayout(self); layout.setSpacing(15); layout.addWidget(label("Tank information", "sectionTitle"))
         form = QFormLayout(); form.setSpacing(12)
         self.code = QLineEdit(tank.name if tank else ""); self.code.setPlaceholderText("e.g. TNK-006")
         self.community = QComboBox(); self.community.addItems([c.name for c in communities] or ["Unassigned"])
-        self.capacity = QLineEdit(str(tank.capacity if tank else 20000)); self.level = QLineEdit(str(tank.level if tank else 0))
-        self.flow = QLineEdit(str(tank.flow if tank else 0)); self.valve = QComboBox(); self.valve.addItems(["Open", "Closed"])
-        self.status = QComboBox(); self.status.addItems(["Normal", "Warning", "Critical"])
+        self.capacity = QLineEdit(f"{tank.capacity:g}" if tank else "20000"); self.level = QLineEdit(f"{tank.level:g}" if tank else "0")
+        self.installed=QLineEdit(tank.installed if tank else date.today().isoformat()); self.installed.setPlaceholderText("YYYY-MM-DD")
+        self.status = QComboBox(); self.status.addItems(status_options)
         if tank:
-            self.community.setCurrentText(tank.community); self.valve.setCurrentText(tank.valve); self.status.setCurrentText(tank.status)
-        for title, widget in [("Tank code",self.code),("Community",self.community),("Capacity (L)",self.capacity),("Current level (L)",self.level),("Flow rate (L/min)",self.flow),("Valve",self.valve),("Status",self.status)]: form.addRow(title,widget)
+            self.community.setCurrentText(tank.community); self.status.setCurrentText(tank.status)
+        for title, widget in [("Tank code",self.code),("Community",self.community),("Capacity (L)",self.capacity),("Current level (L)",self.level),("Installation date",self.installed),("Database status",self.status)]: form.addRow(title,widget)
         layout.addLayout(form); buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel|QDialogButtonBox.StandardButton.Save)
         buttons.accepted.connect(self.accept); buttons.rejected.connect(self.reject); layout.addWidget(buttons)
 
     def value(self) -> WaterTank:
         code = self.code.text().strip()
         if not code: raise ValueError("Enter a tank code.")
-        capacity, level, flow = int(self.capacity.text()), int(self.level.text()), float(self.flow.text())
+        capacity, level = float(self.capacity.text()), float(self.level.text())
         if capacity <= 0 or not 0 <= level <= capacity: raise ValueError("Capacity must be positive and water level must be within capacity.")
-        if flow < 0: raise ValueError("Flow rate cannot be negative.")
-        return WaterTank(self.tank_id, code, self.community.currentText(), capacity, level, flow,
-                         self.valve.currentText(), self.status.currentText())
+        installed=self.installed.text().strip()
+        if installed: date.fromisoformat(installed)
+        flow=self.current_tank.flow if self.current_tank else 0.0; valve=self.current_tank.valve if self.current_tank else "UNKNOWN"
+        return WaterTank(self.tank_id,code,self.community.currentText(),capacity,level,flow,valve,
+                         self.status.currentText(),installed=installed)
 
 
 class LoginDialog(QDialog):
@@ -607,9 +753,9 @@ class DashboardPage(QWidget):
     def refresh(self):
         tanks, alerts, communities = self.repo.tanks(), self.repo.alerts(), self.repo.communities()
         self.level_chart.set_tanks(tanks)
-        counts=[sum(t.status==status for t in tanks) for status in ("Normal","Warning","Critical")]
+        counts=[sum(t.health==status for t in tanks) for status in ("Normal","Warning","Critical")]
         for target,color,count in zip(self.level_legend,("Healthy","Needs attention","Critical"),counts): target.setText(f"{color} · {count}")
-        values={"communities":str(len(communities)),"tanks":str(len(tanks)),"water":f"{sum(t.level for t in tanks):,} L","alerts":str(sum(not a.resolved for a in alerts))}
+        values={"communities":str(len(communities)),"tanks":str(len(tanks)),"water":f"{format_litres(sum(t.level for t in tanks))} L","alerts":str(sum(not a.resolved for a in alerts))}
         for widget,key in self._metric_cards: widget.setText(values[key])
         while self.alert_list.count():
             item=self.alert_list.takeAt(0); w=item.widget()
@@ -621,6 +767,7 @@ class DashboardPage(QWidget):
 class TanksPage(QWidget):
     def __init__(self, repo: AssetRepository, changed):
         super().__init__(); self.repo,self.changed=repo,changed; root=QVBoxLayout(self); root.setContentsMargins(0,0,0,0); root.setSpacing(14)
+        self.status_options=["ACTIVE","MAINTENANCE"] if isinstance(repo,PostgresRepository) else ["Normal","Warning","Critical"]
         head=QHBoxLayout(); head.addWidget(section_heading("Tank management","Monitor levels, flow and connected equipment.")); head.addStretch(); self.search=QLineEdit(); self.search.setPlaceholderText("⌕  Search tanks..."); self.search.setMaximumWidth(220); self.filter=QComboBox(); self.filter.addItem("All communities"); self.filter.addItems([c.name for c in repo.communities()]); add=make_button("＋  Add tank",True); add.clicked.connect(self.add_tank); head.addWidget(self.search); head.addWidget(self.filter); head.addWidget(add); root.addLayout(head)
         summary=QHBoxLayout()
         self.summary_values=[]
@@ -633,27 +780,27 @@ class TanksPage(QWidget):
     def refresh(self):
         query=self.search.text().lower(); community=self.filter.currentText(); tanks=[t for t in self.repo.tanks() if (not query or query in t.name.lower() or query in t.community.lower()) and (community=="All communities" or t.community==community)]
         all_tanks=self.repo.tanks(); average=round(sum(t.percentage for t in all_tanks)/len(all_tanks)) if all_tanks else 0
-        for widget,value in zip(self.summary_values,(f"{len(all_tanks):02d} connected",f"{average}% average",f"{sum(t.status=='Critical' for t in all_tanks):02d} critical")): widget.setText(value)
+        for widget,value in zip(self.summary_values,(f"{len(all_tanks):02d} connected",f"{average}% average",f"{sum(t.health=='Critical' for t in all_tanks):02d} critical")): widget.setText(value)
         self.table.setRowCount(len(tanks))
         for r,t in enumerate(tanks):
             c=QWidget(); cl=QVBoxLayout(c); cl.setContentsMargins(8,5,8,5); cl.addWidget(label(t.name)); cl.addWidget(label(f"{t.community} · Updated {t.updated}","muted")); self.table.setCellWidget(r,0,c)
             bar=QWidget(); bl=QVBoxLayout(bar); bl.setContentsMargins(8,10,8,10); pct=label(f"{t.percentage}%"); pct.setStyleSheet(f"color:{PALETTE['red'] if t.percentage<30 else PALETTE['orange'] if t.percentage<50 else PALETTE['green']};font-weight:700;"); bl.addWidget(pct); self.table.setCellWidget(r,1,bar)
-            self.table.setItem(r,2,QTableWidgetItem(f"{t.capacity:,} L")); self.table.setItem(r,3,QTableWidgetItem(f"{t.flow:g} L/min")); self.table.setItem(r,4,QTableWidgetItem("●  "+t.valve))
-            badge=QLabel("  "+t.status+"  "); color=PALETTE["green"] if t.status=="Normal" else PALETTE["orange"] if t.status=="Warning" else PALETTE["red"]; badge.setStyleSheet(f"color:{color};background:#18{color[1:]};border-radius:8px;padding:5px;font-weight:600;"); badge.setAlignment(Qt.AlignmentFlag.AlignCenter); self.table.setCellWidget(r,5,badge)
+            self.table.setItem(r,2,QTableWidgetItem(f"{format_litres(t.capacity)} L")); self.table.setItem(r,3,QTableWidgetItem(f"{t.flow:g} L/min")); self.table.setItem(r,4,QTableWidgetItem("●  "+t.valve))
+            badge=QLabel("  "+t.status.replace("_"," ").title()+"  "); color=PALETTE["green"] if t.health=="Normal" else PALETTE["orange"] if t.health=="Warning" else PALETTE["red"]; badge.setStyleSheet(f"color:{color};background:#18{color[1:]};border-radius:8px;padding:5px;font-weight:600;"); badge.setAlignment(Qt.AlignmentFlag.AlignCenter); self.table.setCellWidget(r,5,badge)
             actions=QWidget(); ar=QHBoxLayout(actions); ar.setContentsMargins(3,4,3,4); ar.setSpacing(5); edit=QPushButton("Edit"); delete=QPushButton("Delete"); edit.setMinimumWidth(56); delete.setMinimumWidth(72); delete.setObjectName("danger"); edit.clicked.connect(lambda checked=False,x=t:self.edit_tank(x)); delete.clicked.connect(lambda checked=False,x=t:self.delete_tank(x)); ar.addWidget(edit); ar.addWidget(delete); self.table.setCellWidget(r,6,actions); self.table.setRowHeight(r,62)
 
     def add_tank(self):
-        dlg=TankDialog(self.repo.communities())
+        dlg=TankDialog(self.repo.communities(),self.status_options)
         if dlg.exec():
             try: self.repo.save_tank(dlg.value()); self.refresh(); self.changed()
             except Exception as exc: QMessageBox.warning(self,"Could not save tank",str(exc))
     def edit_tank(self,tank):
-        dlg=TankDialog(self.repo.communities(),tank)
+        dlg=TankDialog(self.repo.communities(),self.status_options,tank)
         if dlg.exec():
             try: self.repo.save_tank(dlg.value()); self.refresh(); self.changed()
             except Exception as exc: QMessageBox.warning(self,"Could not save tank",str(exc))
     def delete_tank(self,tank):
-        if QMessageBox.question(self,"Delete tank",f"Delete {tank.name}? This action cannot be undone.")==QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self,"Delete tank",f"Delete {tank.name} and its linked sensors, readings, valves, transactions, alerts, equipment and maintenance records? This cannot be undone.")==QMessageBox.StandardButton.Yes:
             try: self.repo.delete_tank(tank.asset_id); self.refresh(); self.changed()
             except Exception as exc: QMessageBox.critical(self,"Delete failed",str(exc))
 
@@ -711,29 +858,39 @@ class CommunityPage(QWidget):
         try: self.repo.save_community(community); self.refresh(); self.changed()
         except Exception as exc: QMessageBox.critical(self,"Save failed",str(exc))
     def delete_community(self,community):
-        if QMessageBox.question(self,"Delete community",f"Delete {community.name}? Tanks in this community will become unassigned.")==QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self,"Delete community",f"Delete {community.name}? Reassign or delete its tanks first.")==QMessageBox.StandardButton.Yes:
             try: self.repo.delete_community(community.community_id); self.refresh(); self.changed()
             except Exception as exc: QMessageBox.critical(self,"Delete failed",str(exc))
 
 
 class GenericRecordDialog(QDialog):
     """Consistent validated form used by database-backed operations lists."""
-    def __init__(self, title: str, headers: tuple[str, ...], values: Optional[list[str]] = None):
+    def __init__(self, title: str, headers: tuple[str, ...], values: Optional[list[str]] = None,
+                 required_fields: tuple[int, ...] = (), choices: Optional[dict[int,list[str]]] = None):
         super().__init__(); self.setWindowTitle(title); self.setMinimumWidth(440)
-        self.fields: list[QLineEdit] = []
+        self.fields: list[QWidget] = []; self.required_fields=required_fields; choices=choices or {}
         root=QVBoxLayout(self); root.setContentsMargins(24,22,24,18); root.setSpacing(16)
         root.addWidget(label(title,"sectionTitle")); form=QFormLayout(); form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow); form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter); form.setHorizontalSpacing(18); form.setVerticalSpacing(12)
         for index, header in enumerate(headers):
-            edit=QLineEdit(values[index] if values and index<len(values) else "")
-            edit.setMinimumWidth(250); edit.setPlaceholderText(f"Enter {header.lower()}")
-            form.addRow(header,edit); self.fields.append(edit)
+            current=values[index] if values and index<len(values) else ""
+            if index in choices:
+                field=QComboBox(); field.setMinimumWidth(250); field.addItems(choices[index]); field.setCurrentText(current)
+                if current and field.currentText()!=current: field.addItem(current); field.setCurrentText(current)
+            else:
+                field=QLineEdit(current); field.setMinimumWidth(250)
+                hint="YYYY-MM-DD" if "date" in header.lower() else "e.g. 84 % or 12 L/min" if "reading" in header.lower() else f"Enter {header.lower()}"
+                field.setPlaceholderText(hint)
+            form.addRow(header,field); self.fields.append(field)
         root.addLayout(form); buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel|QDialogButtonBox.StandardButton.Save)
         buttons.accepted.connect(self._validate); buttons.rejected.connect(self.reject); root.addWidget(buttons)
     def _validate(self):
-        if not self.fields or any(not field.text().strip() for field in self.fields):
-            QMessageBox.warning(self,"Required fields", "Complete all fields before saving this record."); return
+        if any(index>=len(self.fields) or not self._text(self.fields[index]).strip() for index in self.required_fields):
+            QMessageBox.warning(self,"Required fields", "Complete all required fields before saving this record."); return
         self.accept()
-    def value(self) -> list[str]: return [field.text().strip() for field in self.fields]
+    @staticmethod
+    def _text(field: QWidget) -> str:
+        return field.currentText() if isinstance(field,QComboBox) else field.text()
+    def value(self) -> list[str]: return [self._text(field).strip() for field in self.fields]
 
 
 class SettingsPage(QWidget):
@@ -810,12 +967,23 @@ class GenericPage(QWidget):
             match=any(query in (self.table.item(row,col).text().casefold() if self.table.item(row,col) else "") for col in range(len(self.headers)))
             self.table.setRowHidden(row,bool(query) and not match)
     def add_record(self):
-        dialog=GenericRecordDialog(f"Add {self.title.rstrip('s').lower()}",self.headers)
+        dialog=GenericRecordDialog(f"Add {self.title.rstrip('s').lower()}",self.headers,required_fields=REQUIRED_RECORD_FIELDS[self.category],choices=self._choices())
         if dialog.exec()==QDialog.DialogCode.Accepted:
             self._save(0,dialog.value())
     def edit_record(self,record_id,values):
-        dialog=GenericRecordDialog(f"Edit {self.title.rstrip('s').lower()}",self.headers,values)
+        dialog=GenericRecordDialog(f"Edit {self.title.rstrip('s').lower()}",self.headers,values,REQUIRED_RECORD_FIELDS[self.category],self._choices())
         if dialog.exec()==QDialog.DialogCode.Accepted: self._save(record_id,dialog.value())
+    def _choices(self):
+        tanks=[tank.name for tank in self.repo.tanks()]
+        if self.category=="sensors": return {2:tanks,4:["ACTIVE","INACTIVE","FAULT"]}
+        if self.category=="equipment": return {2:tanks,3:["OPERATIONAL","MAINTENANCE","FAULTY"]}
+        if self.category=="transactions": return {0:tanks,1:["INFLOW","USAGE"]}
+        if self.category=="valves": return {1:tanks,2:["OPEN","CLOSED","FAULT"]}
+        if self.category=="maintenance":
+            equipment=[fields[0] for _,fields in self.repo.records("equipment")]
+            technicians=[f"{fields[0]} {fields[1]}" for _,fields in self.repo.records("technicians")]
+            return {1:equipment,2:technicians,3:["Scheduled","In Progress","Completed"]}
+        return {}
     def _save(self,record_id,values):
         try: self.repo.save_record(self.category,record_id,values); self.refresh()
         except Exception as exc: QMessageBox.critical(self,"Save failed",str(exc))
@@ -864,7 +1032,7 @@ class SwimsWindow(QMainWindow):
         brand=QHBoxLayout(); mark=QLabel("≈"); mark.setAlignment(Qt.AlignmentFlag.AlignCenter); mark.setFixedSize(38,38); mark.setStyleSheet("background:#1687D9;color:white;border-radius:12px;font-size:27px;font-weight:700;"); brand.addWidget(mark); names=QVBoxLayout(); n=QLabel("SWIMS"); n.setStyleSheet("color:white;font-size:17px;font-weight:800;letter-spacing:1px;"); names.addWidget(n); sub=QLabel("WATER OPERATIONS"); sub.setStyleSheet("color:#91A9BB;font-size:8px;letter-spacing:1px;"); names.addWidget(sub); brand.addLayout(names); brand.addStretch(); sl.addLayout(brand); sl.addSpacing(26)
         cap=QLabel("WORKSPACE"); cap.setStyleSheet("color:#7891A5;font-size:9px;font-weight:700;letter-spacing:1.2px;padding-left:12px;"); sl.addWidget(cap); sl.addSpacing(7)
         self.stack=QStackedWidget(); self.nav_buttons=[]; self.pages=[]
-        names=[("⌂","Dashboard"),("▤","Communities"),("◉","Tank management"),("◌","Sensors"),("!","Alerts"),("↕","Transactions"),("⚙","Equipment"),("▣","Maintenance"),("♙","Technicians"),("▥","Reports"),("●","Profile & settings")]
+        names=[("⌂","Dashboard"),("▤","Communities"),("◉","Tank management"),("◌","Sensors"),("!","Alerts"),("↕","Transactions"),("⚙","Equipment"),("◍","Valves"),("▣","Maintenance"),("♙","Technicians"),("▥","Reports"),("●","Profile & settings")]
         for icon,title in names:
             b=QPushButton(f"{icon}    {title}"); b.setObjectName("nav"); b.setProperty("selected",title=="Dashboard"); b.clicked.connect(lambda checked=False,x=title:self.navigate(x)); sl.addWidget(b); self.nav_buttons.append((title,b))
         sl.addStretch(); profile=QFrame(); profile.setStyleSheet("background:#1B3A53;border-radius:12px;"); pl=QHBoxLayout(profile); pl.setContentsMargins(10,10,10,10); avatar=QLabel("AM"); avatar.setAlignment(Qt.AlignmentFlag.AlignCenter); avatar.setFixedSize(34,34); avatar.setStyleSheet("background:#2E607D;color:white;border-radius:17px;font-weight:700;"); pl.addWidget(avatar); ptxt=QVBoxLayout(); pn=QLabel("Amina Mansaray"); pn.setStyleSheet("color:white;font-size:11px;font-weight:600;"); pr=QLabel("System operator"); pr.setStyleSheet("color:#91A9BB;font-size:10px;"); ptxt.addWidget(pn); ptxt.addWidget(pr); pl.addLayout(ptxt); sl.addWidget(profile); outer.addWidget(sidebar)
@@ -880,6 +1048,7 @@ class SwimsWindow(QMainWindow):
             "Alerts":self.alerts,
             "Transactions":GenericPage(repo,"transactions","Water transactions","Inflow and consumption records from across the network.",RECORD_SCHEMAS["transactions"]),
             "Equipment":GenericPage(repo,"equipment","Equipment","Pumps, valves, flow meters and control units.",RECORD_SCHEMAS["equipment"]),
+            "Valves":GenericPage(repo,"valves","Valves","Manage valve status and installation records.",RECORD_SCHEMAS["valves"]),
             "Maintenance":GenericPage(repo,"maintenance","Maintenance","Track field work and upcoming service activities.",RECORD_SCHEMAS["maintenance"]),
             "Technicians":GenericPage(repo,"technicians","Technicians","Field team directory and assigned responsibilities.",RECORD_SCHEMAS["technicians"]),
             "Reports":ReportsPage(repo),
@@ -952,7 +1121,7 @@ def main() -> int:
     demo=not bool(database_config)
     try: repo=PostgresRepository(database_config) if not demo else DemoRepository()
     except Exception as exc:
-        QMessageBox.critical(None,"Database connection failed",f"SWIMS could not connect to PostgreSQL.\n\n{exc}\n\nSet SWIMS_DATABASE_URL and restart."); return 1
+        QMessageBox.critical(None,"Database connection failed",f"SWIMS could not connect to the configured PostgreSQL schema.\n\n{exc}\n\nCheck DB_* values in .env and confirm the database is available."); return 1
     login=LoginDialog()
     if login.exec()!=QDialog.DialogCode.Accepted: return 0
     window=SwimsWindow(repo,demo); window.show(); return app.exec()
