@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
@@ -288,14 +289,14 @@ class DemoRepository(AssetRepository):
 
 
 class PostgresRepository(AssetRepository):
-    """PostgreSQL implementation. Requires psycopg2 and SWIMS_DATABASE_URL."""
+    """PostgreSQL implementation. Accepts a DSN or standard connection fields."""
 
-    def __init__(self, dsn: str):
+    def __init__(self, dsn: str | dict[str, object]):
         try:
             import psycopg2
         except ImportError as exc:
             raise RuntimeError("Install dependencies with: pip install -r requirements.txt") from exc
-        self._db = psycopg2.connect(dsn)
+        self._db = psycopg2.connect(dsn) if isinstance(dsn,str) else psycopg2.connect(**dsn)
         self._db.autocommit = True
         self._setup()
 
@@ -906,10 +907,46 @@ class SwimsWindow(QMainWindow):
             self.settings.dark.blockSignals(True); self.settings.dark.setChecked(dark); self.settings.dark.blockSignals(False)
 
 
+def load_local_environment(path: Path = Path(".env")) -> None:
+    """Read simple KEY=VALUE entries; process-level variables take precedence."""
+    if not path.is_file():
+        return
+    for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
+        line=raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line=line[7:].lstrip()
+        if "=" not in line:
+            continue
+        key,value=line.split("=",1); key=key.strip(); value=value.strip()
+        if len(value)>=2 and value[0]==value[-1] and value[0] in ("'",'"'):
+            value=value[1:-1]
+        if key and key not in os.environ:
+            os.environ[key]=value
+
+
 def main() -> int:
     app=QApplication(sys.argv); app.setApplicationName("SWIMS"); app.setStyle("Fusion"); app.setStyleSheet(APP_STYLE)
-    dsn=os.environ.get("SWIMS_DATABASE_URL","").strip(); demo=not bool(dsn)
-    try: repo=PostgresRepository(dsn) if dsn else DemoRepository()
+    load_local_environment()
+    dsn=os.environ.get("SWIMS_DATABASE_URL","").strip()
+    db_keys=("DB_HOST","DB_PORT","DB_NAME","DB_USER")
+    if dsn:
+        database_config: str | dict[str, object] = dsn
+    elif any(os.environ.get(key,"").strip() for key in (*db_keys,"DB_PASSWORD")):
+        missing=[key for key in db_keys if not os.environ.get(key,"").strip()]
+        if missing:
+            QMessageBox.critical(None,"Incomplete database settings","Add these values to .env: " + ", ".join(missing)); return 1
+        try:
+            database_config = {"host":os.environ["DB_HOST"].strip(),"port":int(os.environ["DB_PORT"].strip()),
+                               "dbname":os.environ["DB_NAME"].strip(),"user":os.environ["DB_USER"].strip(),
+                               "password":os.environ.get("DB_PASSWORD","")}
+        except ValueError:
+            QMessageBox.critical(None,"Invalid database settings","DB_PORT in .env must be a number."); return 1
+    else:
+        database_config = ""
+    demo=not bool(database_config)
+    try: repo=PostgresRepository(database_config) if not demo else DemoRepository()
     except Exception as exc:
         QMessageBox.critical(None,"Database connection failed",f"SWIMS could not connect to PostgreSQL.\n\n{exc}\n\nSet SWIMS_DATABASE_URL and restart."); return 1
     login=LoginDialog()

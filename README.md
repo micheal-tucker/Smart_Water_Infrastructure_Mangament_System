@@ -21,12 +21,15 @@ Without a database connection setting, SWIMS opens with clearly labelled sample 
 
 ## PostgreSQL setup
 
-Create a PostgreSQL database (for example, `swims`) and set the connection string before starting the app:
+Create a PostgreSQL database (for example, `swims`). Put its settings in a local `.env` file in this folder:
 
 ```powershell
-$env:SWIMS_DATABASE_URL = "postgresql://postgres:your-password@localhost:5432/swims"
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+notepad .env
 py main.py
 ```
+
+Fill in `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`. The app reads `.env` automatically; process environment variables override values from the file. You can also use `SWIMS_DATABASE_URL` if you prefer a connection URL. `.env` is ignored by Git so database credentials are not committed.
 
 On first connection the app creates the `communities`, `tanks`, `alerts`, and `swims_records` tables. It inserts four starter communities only when the communities table is empty. Tanks, sensors, water transactions, equipment, maintenance tasks, and technicians each have working add, edit, delete, search, and CSV export controls. Tank and community changes, alert resolution, and operational records are written to PostgreSQL immediately. Reports export the current tank, alert, transaction, or maintenance data to CSV, which opens in Excel. A newly created database has no tanks or operational records; add them from the corresponding screens.
 
