@@ -792,13 +792,23 @@ class TanksPage(QWidget):
     def add_tank(self):
         dlg=TankDialog(self.repo.communities(),self.status_options)
         if dlg.exec():
-            try: self.repo.save_tank(dlg.value()); self.refresh(); self.changed()
+            try:
+                tank=self.repo.save_tank(dlg.value()); self._show_tank(tank); self.changed()
             except Exception as exc: QMessageBox.warning(self,"Could not save tank",str(exc))
     def edit_tank(self,tank):
         dlg=TankDialog(self.repo.communities(),self.status_options,tank)
         if dlg.exec():
-            try: self.repo.save_tank(dlg.value()); self.refresh(); self.changed()
+            try:
+                tank=self.repo.save_tank(dlg.value()); self._show_tank(tank); self.changed()
             except Exception as exc: QMessageBox.warning(self,"Could not save tank",str(exc))
+    def _show_tank(self,tank):
+        self.search.blockSignals(True); self.filter.blockSignals(True)
+        self.search.clear(); self.filter.setCurrentIndex(0)
+        self.search.blockSignals(False); self.filter.blockSignals(False)
+        self.refresh()
+        for row,current in enumerate(self.repo.tanks()):
+            if current.asset_id==tank.asset_id:
+                self.table.selectRow(row); self.table.scrollToItem(self.table.item(row,2)); break
     def delete_tank(self,tank):
         if QMessageBox.question(self,"Delete tank",f"Delete {tank.name} and its linked sensors, readings, valves, transactions, alerts, equipment and maintenance records? This cannot be undone.")==QMessageBox.StandardButton.Yes:
             try: self.repo.delete_tank(tank.asset_id); self.refresh(); self.changed()
