@@ -11,6 +11,7 @@ import os
 import sys
 import math
 from pathlib import Path
+from xml.sax.saxutils import escape
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -942,33 +943,89 @@ class SettingsPage(QWidget):
 class ReportsPage(QWidget):
     def __init__(self, repo: AssetRepository):
         super().__init__(); self.repo=repo; root=QVBoxLayout(self); root.setContentsMargins(0,0,0,0); root.setSpacing(16)
-        root.addWidget(section_heading("Reports & exports","Download current operational data as spreadsheet-ready CSV files."))
+        heading=QHBoxLayout(); heading.addWidget(section_heading("Reports & exports","Build clear reports from your saved water operations data.")); heading.addStretch(); root.addLayout(heading)
+        self.summary_values=[]; summary=QHBoxLayout(); summary.setSpacing(12)
+        for title,color in [("Tanks",PALETTE["blue"]),("Transactions",PALETTE["aqua"]),("Open alerts",PALETTE["red"]),("Maintenance tasks",PALETTE["orange"])]:
+            frame=card(); layout=QVBoxLayout(frame); layout.setContentsMargins(16,12,16,12); layout.addWidget(label(title,"muted")); value=label("0"); value.setStyleSheet(f"font-size:24px;font-weight:700;color:{color};"); layout.addWidget(value); summary.addWidget(frame); self.summary_values.append(value)
+        root.addLayout(summary)
+        root.addWidget(section_heading("Available reports","Choose PDF for a print-ready summary or Excel for data analysis."))
+        self.grid=QGridLayout(); self.grid.setHorizontalSpacing(14); self.grid.setVerticalSpacing(14); root.addLayout(self.grid,1)
         self.report_rows=[
-            ("Water usage report","Transactions and recorded volumes","usage"),
-            ("Tank status report","Capacity, level, flow and valve status","tanks"),
-            ("Alert report","Open and resolved network alerts","alerts"),
-            ("Maintenance report","Scheduled and completed field work","maintenance"),
+            ("Water usage","Transaction volumes, types, and timestamps","usage","↕"),
+            ("Tank status","Water levels, capacity, valves, and sensor flow","tanks","◉"),
+            ("Alerts & incidents","Alert messages, priority, and resolution state","alerts","!"),
+            ("Maintenance history","Field tasks, technicians, dates, and notes","maintenance","⚙"),
         ]
-        for title,description,category in self.report_rows:
-            frame=card(); row=QHBoxLayout(frame); row.setContentsMargins(18,14,18,14); details=QVBoxLayout(); details.addWidget(label(title,"sectionTitle")); details.addWidget(label(description,"muted")); row.addLayout(details,1); button=make_button("Export CSV"); button.clicked.connect(lambda checked=False,c=category:self.export(c)); row.addWidget(button); root.addWidget(frame)
-        root.addStretch()
-    def export(self,category):
-        import csv
-        if category=="usage": headers=RECORD_SCHEMAS["transactions"]; rows=[fields for _,fields in self.repo.records("transactions")]; name="water_usage"
-        elif category=="maintenance": headers=RECORD_SCHEMAS["maintenance"]; rows=[fields for _,fields in self.repo.records("maintenance")]; name="maintenance"
-        elif category=="tanks":
+        self.report_counts={}
+        for index,(title,description,category,icon_text) in enumerate(self.report_rows):
+            frame=card(); box=QVBoxLayout(frame); box.setContentsMargins(18,16,18,16); box.setSpacing(10)
+            head=QHBoxLayout(); icon=label(icon_text); icon.setAlignment(Qt.AlignmentFlag.AlignCenter); icon.setFixedSize(38,38); icon.setStyleSheet("background:#EAF7FB;color:#1687D9;border-radius:11px;font-size:18px;font-weight:700;"); head.addWidget(icon); head.addWidget(label(title,"sectionTitle"),1); box.addLayout(head)
+            detail=label(description,"muted"); detail.setWordWrap(True); detail.setMinimumHeight(38); box.addWidget(detail)
+            foot=QHBoxLayout(); count=label("0 records","muted"); foot.addWidget(count); foot.addStretch()
+            for format_name in ("PDF","Excel"):
+                button=make_button(format_name); button.clicked.connect(lambda checked=False,c=category,f=format_name:self.export(c,f)); foot.addWidget(button)
+            box.addLayout(foot); self.grid.addWidget(frame,index//2,index%2); self.report_counts[category]=count
+        self.refresh()
+    def _data_for(self,category):
+        if category=="usage":
+            return RECORD_SCHEMAS["transactions"],[fields for _,fields in self.repo.records("transactions")],"water_usage"
+        if category=="maintenance":
+            return RECORD_SCHEMAS["maintenance"],[fields for _,fields in self.repo.records("maintenance")],"maintenance"
+        if category=="tanks":
             headers=("Tank code","Community","Capacity (L)","Current level (L)","Percentage","Flow (L/min)","Valve","Status")
-            rows=[[tank.name,tank.community,tank.capacity,tank.level,tank.percentage,tank.flow,tank.valve,tank.status] for tank in self.repo.tanks()]; name="tank_status"
+            rows=[[tank.name,tank.community,tank.capacity,tank.level,tank.percentage,tank.flow,tank.valve,tank.status] for tank in self.repo.tanks()]
+            return headers,rows,"tank_status"
+        headers=("Alert","Tank","Severity","Time","Details","Resolved")
+        rows=[[alert.title,alert.tank,alert.severity,alert.time,alert.detail,"Yes" if alert.resolved else "No"] for alert in self.repo.alerts()]
+        return headers,rows,"alerts"
+    def refresh(self):
+        tanks=self.repo.tanks(); transactions=self.repo.records("transactions"); alerts=self.repo.alerts(); maintenance=self.repo.records("maintenance")
+        counts=(len(tanks),len(transactions),sum(not alert.resolved for alert in alerts),len(maintenance))
+        for widget,value in zip(self.summary_values,counts): widget.setText(str(value))
+        for _,_,category,_ in self.report_rows:
+            _,rows,_=self._data_for(category); self.report_counts[category].setText(f"{len(rows)} record"+("s" if len(rows)!=1 else ""))
+    def export(self,category,format_name):
+        headers,rows,name=self._data_for(category)
+        if format_name=="Excel":
+            path,_=QFileDialog.getSaveFileName(self,"Export Excel report",f"swims_{name}.xlsx","Excel workbook (*.xlsx)")
+            if not path: return
+            if not path.lower().endswith(".xlsx"): path+=".xlsx"
+            try:
+                from openpyxl import Workbook
+                from openpyxl.styles import Alignment,Font,PatternFill
+                workbook=Workbook(); sheet=workbook.active; sheet.title=name[:31]
+                sheet.append([next(title for title,_,key,_ in self.report_rows if key==category)]); sheet.merge_cells(start_row=1,start_column=1,end_row=1,end_column=len(headers))
+                sheet["A1"].font=Font(bold=True,size=16,color="102A43"); sheet.append(list(headers))
+                for cell in sheet[2]: cell.font=Font(bold=True,color="FFFFFF"); cell.fill=PatternFill("solid",fgColor="1687D9"); cell.alignment=Alignment(vertical="center")
+                for row in rows: sheet.append(list(row))
+                sheet.freeze_panes="A3"; sheet.auto_filter.ref=sheet.dimensions
+                from openpyxl.utils import get_column_letter
+                for index,header in enumerate(headers,1):
+                    values=[str(header),*(str(row[index-1] or "") for row in rows)]
+                    sheet.column_dimensions[get_column_letter(index)].width=min(42,max(14,max(map(len,values))+2))
+                workbook.save(path)
+            except Exception as exc: QMessageBox.critical(self,"Excel export failed",f"{exc}\n\nInstall dependencies with: py -m pip install -r requirements.txt"); return
         else:
-            headers=("Alert","Tank","Severity","Time","Details","Resolved")
-            rows=[[alert.title,alert.tank,alert.severity,alert.time,alert.detail,alert.resolved] for alert in self.repo.alerts()]; name="alerts"
-        path,_=QFileDialog.getSaveFileName(self,"Export report",f"swims_{name}.csv","CSV files (*.csv)")
-        if not path: return
-        try:
-            with open(path,"w",newline="",encoding="utf-8-sig") as output:
-                writer=csv.writer(output); writer.writerow(headers); writer.writerows(rows)
-            QMessageBox.information(self,"Export complete",f"Report saved to:\n{path}")
-        except OSError as exc: QMessageBox.critical(self,"Export failed",str(exc))
+            path,_=QFileDialog.getSaveFileName(self,"Export PDF report",f"swims_{name}.pdf","PDF document (*.pdf)")
+            if not path: return
+            if not path.lower().endswith(".pdf"): path+=".pdf"
+            try:
+                from reportlab.lib import colors
+                from reportlab.lib.enums import TA_LEFT
+                from reportlab.lib.pagesizes import A4,landscape
+                from reportlab.lib.styles import ParagraphStyle,getSampleStyleSheet
+                from reportlab.lib.units import mm
+                from reportlab.platypus import Paragraph,SimpleDocTemplate,Spacer,Table,TableStyle
+                title=next(title for title,_,key,_ in self.report_rows if key==category)
+                doc=SimpleDocTemplate(path,pagesize=landscape(A4),rightMargin=15*mm,leftMargin=15*mm,topMargin=15*mm,bottomMargin=15*mm)
+                styles=getSampleStyleSheet(); story=[Paragraph("SWIMS · "+escape(title),styles["Title"]),Paragraph("Smart Water Infrastructure Management System · Generated "+datetime.now().strftime("%Y-%m-%d %H:%M"),styles["Normal"]),Spacer(1,8*mm)]
+                body=ParagraphStyle("SWIMSBody",parent=styles["BodyText"],fontSize=8,leading=11,alignment=TA_LEFT)
+                table_data=[[Paragraph(escape(str(value)),body) for value in headers]]+[[Paragraph(escape(str(value)),body) for value in row] for row in rows]
+                table=Table(table_data,repeatRows=1,hAlign="LEFT")
+                table.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#102A43")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("GRID",(0,0),(-1,-1),0.35,colors.HexColor("#D9E3EA")),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#F3F8FB")]),("VALIGN",(0,0),(-1,-1),"TOP"),("LEFTPADDING",(0,0),(-1,-1),7),("RIGHTPADDING",(0,0),(-1,-1),7),("TOPPADDING",(0,0),(-1,-1),6),("BOTTOMPADDING",(0,0),(-1,-1),6)]))
+                story.append(table); doc.build(story)
+            except Exception as exc: QMessageBox.critical(self,"PDF export failed",f"{exc}\n\nInstall dependencies with: py -m pip install -r requirements.txt"); return
+        QMessageBox.information(self,"Export complete",f"Report saved to:\n{path}")
 
 
 class GenericPage(QWidget):
@@ -1111,6 +1168,7 @@ class SwimsWindow(QMainWindow):
         if title=="Tank management": self.tanks.refresh()
         if title=="Communities": self.page_map[title].refresh()
         if isinstance(self.page_map[title],GenericPage): self.page_map[title].refresh()
+        if title=="Reports": self.page_map[title].refresh()
     def refresh_dashboard(self): self.dashboard.refresh()
     def community_changed(self):
         self.dashboard.refresh()
