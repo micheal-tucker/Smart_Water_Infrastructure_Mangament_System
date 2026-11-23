@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
+import math
 from pathlib import Path
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -343,7 +344,7 @@ class PostgresRepository(AssetRepository):
         with self._db.cursor() as cur:
             cur.execute("""SELECT w.tank_id,w.tank_code,c.community_name,w.capacity_litres,w.current_level,
                 COALESCE((SELECT r.reading_value FROM sensor_readings r JOIN sensors s USING(sensor_id)
-                    WHERE s.tank_id=w.tank_id AND LOWER(s.sensor_type)='flow' ORDER BY r.reading_time DESC LIMIT 1),0),
+                    WHERE s.tank_id=w.tank_id AND LOWER(s.sensor_type)='flow' ORDER BY r.reading_time DESC,r.reading_id DESC LIMIT 1),0),
                 COALESCE((SELECT v.valve_status FROM valves v WHERE v.tank_id=w.tank_id LIMIT 1),'UNKNOWN'),
                 w.status,COALESCE((SELECT TO_CHAR(MAX(r.reading_time),'HH24:MI') FROM sensor_readings r
                     JOIN sensors s USING(sensor_id) WHERE s.tank_id=w.tank_id),'—'),w.installation_date
@@ -436,7 +437,7 @@ class PostgresRepository(AssetRepository):
                     COALESCE(r.reading_value::text || ' ' || r.reading_unit,''),COALESCE(s.status,'UNKNOWN')
                     FROM sensors s JOIN water_tanks w USING(tank_id)
                     LEFT JOIN LATERAL (SELECT reading_value,reading_unit FROM sensor_readings
-                        WHERE sensor_id=s.sensor_id ORDER BY reading_time DESC LIMIT 1) r ON TRUE ORDER BY s.sensor_id""")
+                        WHERE sensor_id=s.sensor_id ORDER BY reading_time DESC,reading_id DESC LIMIT 1) r ON TRUE ORDER BY s.sensor_id""")
             elif category=="transactions":
                 cur.execute("""SELECT t.transaction_id,w.tank_code,t.transaction_type,t.litres::text,
                     t.transaction_date,t.level_after::text FROM water_transactions t JOIN water_tanks w USING(tank_id)
@@ -476,6 +477,7 @@ class PostgresRepository(AssetRepository):
             if len(parts)!=2: raise ValueError("Enter the reading as a number and unit, for example 84 % or 12 L/min.")
             try: numeric=float(parts[0])
             except ValueError as exc: raise ValueError("Sensor reading must start with a number.") from exc
+            if not math.isfinite(numeric) or numeric<0: raise ValueError("Sensor reading must be a finite, non-negative number.")
             if record_id:
                 cur.execute("UPDATE sensors SET sensor_code=%s,sensor_type=%s,tank_id=%s,status=%s WHERE sensor_id=%s",(code,sensor_type,target,status,record_id))
                 if not cur.rowcount: raise ValueError("Sensor no longer exists. Refresh and try again.")
@@ -484,8 +486,19 @@ class PostgresRepository(AssetRepository):
                 cur.execute("INSERT INTO sensors(sensor_code,sensor_type,tank_id,status) VALUES(%s,%s,%s,%s) RETURNING sensor_id",(code,sensor_type,target,status)); sensor_id=cur.fetchone()[0]
             cur.execute("INSERT INTO sensor_readings(sensor_id,reading_value,reading_unit,reading_time,status) VALUES(%s,%s,%s,NOW(),%s)",(sensor_id,numeric,parts[1],status))
             return sensor_id
+        if category=="sensors":
+            owns_transaction=self._db.autocommit
+            if owns_transaction: self._db.autocommit=False
+            try:
+                with self._db.cursor() as cur: saved_id=save_sensor(cur)
+                if owns_transaction: self._db.commit()
+                return saved_id
+            except Exception:
+                if owns_transaction: self._db.rollback()
+                raise
+            finally:
+                if owns_transaction: self._db.autocommit=True
         with self._db.cursor() as cur:
-            if category=="sensors": return save_sensor(cur)
             if category=="transactions":
                 tank_code,kind,litres,stamp,level_after=fields; target=tank_id(cur,tank_code)
                 if record_id:
@@ -528,21 +541,30 @@ class PostgresRepository(AssetRepository):
             raise ValueError(f"Unsupported database records category: {category}")
 
     def delete_record(self, category: str, record_id: int) -> None:
-        with self._db.cursor() as cur:
-            if category=="sensors":
-                cur.execute("DELETE FROM sensor_readings WHERE sensor_id=%s",(record_id,)); cur.execute("DELETE FROM sensors WHERE sensor_id=%s",(record_id,))
-            elif category=="equipment":
-                cur.execute("SELECT COUNT(*) FROM maintenance WHERE equipment_id=%s",(record_id,))
-                if cur.fetchone()[0]: raise ValueError("This equipment has maintenance history. Delete or reassign those tasks first.")
-                cur.execute("DELETE FROM equipment WHERE equipment_id=%s",(record_id,))
-            elif category=="maintenance": cur.execute("DELETE FROM maintenance WHERE maintenance_id=%s",(record_id,))
-            elif category=="technicians":
-                cur.execute("SELECT COUNT(*) FROM maintenance WHERE technician_id=%s",(record_id,))
-                if cur.fetchone()[0]: raise ValueError("This technician has maintenance history. Reassign those tasks before deleting the technician.")
-                cur.execute("DELETE FROM technicians WHERE technician_id=%s",(record_id,))
-            elif category=="transactions": cur.execute("DELETE FROM water_transactions WHERE transaction_id=%s",(record_id,))
-            elif category=="valves": cur.execute("DELETE FROM valves WHERE valve_id=%s",(record_id,))
-            else: raise ValueError(f"Unsupported database records category: {category}")
+        owns_transaction=self._db.autocommit
+        if owns_transaction: self._db.autocommit=False
+        try:
+            with self._db.cursor() as cur:
+                if category=="sensors":
+                    cur.execute("DELETE FROM sensor_readings WHERE sensor_id=%s",(record_id,)); cur.execute("DELETE FROM sensors WHERE sensor_id=%s",(record_id,))
+                elif category=="equipment":
+                    cur.execute("SELECT COUNT(*) FROM maintenance WHERE equipment_id=%s",(record_id,))
+                    if cur.fetchone()[0]: raise ValueError("This equipment has maintenance history. Delete or reassign those tasks first.")
+                    cur.execute("DELETE FROM equipment WHERE equipment_id=%s",(record_id,))
+                elif category=="maintenance": cur.execute("DELETE FROM maintenance WHERE maintenance_id=%s",(record_id,))
+                elif category=="technicians":
+                    cur.execute("SELECT COUNT(*) FROM maintenance WHERE technician_id=%s",(record_id,))
+                    if cur.fetchone()[0]: raise ValueError("This technician has maintenance history. Reassign those tasks before deleting the technician.")
+                    cur.execute("DELETE FROM technicians WHERE technician_id=%s",(record_id,))
+                elif category=="transactions": cur.execute("DELETE FROM water_transactions WHERE transaction_id=%s",(record_id,))
+                elif category=="valves": cur.execute("DELETE FROM valves WHERE valve_id=%s",(record_id,))
+                else: raise ValueError(f"Unsupported database records category: {category}")
+            if owns_transaction: self._db.commit()
+        except Exception:
+            if owns_transaction: self._db.rollback()
+            raise
+        finally:
+            if owns_transaction: self._db.autocommit=True
 
 
 # --------------------------------- Styling ---------------------------------
@@ -1072,6 +1094,9 @@ class SwimsWindow(QMainWindow):
         for name,button in self.nav_buttons: button.setProperty("selected",name==title); button.style().unpolish(button); button.style().polish(button)
         if title=="Dashboard": self.dashboard.refresh()
         if title=="Alerts": self.alerts.refresh()
+        if title=="Tank management": self.tanks.refresh()
+        if title=="Communities": self.page_map[title].refresh()
+        if isinstance(self.page_map[title],GenericPage): self.page_map[title].refresh()
     def refresh_dashboard(self): self.dashboard.refresh()
     def community_changed(self):
         self.dashboard.refresh()
