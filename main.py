@@ -735,7 +735,7 @@ class LoginDialog(QDialog):
         name=QVBoxLayout(); t=QLabel("SWIMS"); t.setStyleSheet("font-size:21px;font-weight:800;letter-spacing:1px;color:#102A43;"); name.addWidget(t); sub=QLabel("SMART WATER INFRASTRUCTURE"); sub.setStyleSheet("font-size:9px;letter-spacing:1px;color:#8295A6;"); name.addWidget(sub); brand.addLayout(name); brand.addStretch(); root.addLayout(brand); root.addSpacing(18)
         art=QFrame(); art.setFixedHeight(142); art.setStyleSheet("background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #DDF5F7,stop:1 #DCEEFF);border-radius:18px;"); artlay=QVBoxLayout(art); artlay.addStretch(); wave=QLabel("     〰      〰      〰"); wave.setStyleSheet("font-size:26px;color:#1687D9;"); artlay.addWidget(wave); artlay.addWidget(QLabel("      Clean water. Connected communities.")); artlay.addStretch(); root.addWidget(art)
         welcome=QLabel("Welcome back"); welcome.setStyleSheet("font-size:22px;font-weight:700;color:#102A43;"); root.addWidget(welcome); root.addWidget(QLabel("Sign in to your water operations workspace."))
-        root.addSpacing(5); root.addWidget(QLabel("Username")); self.username=QLineEdit(); self.username.setPlaceholderText("Donald, Michael, Aziz, Joshua, Mohamed, or Alex"); root.addWidget(self.username)
+        root.addSpacing(5); root.addWidget(QLabel("Username")); self.username=QLineEdit(); self.username.setPlaceholderText("Username"); root.addWidget(self.username)
         root.addWidget(QLabel("Password")); self.password=QLineEdit(); self.password.setPlaceholderText("Enter your password"); self.password.setEchoMode(QLineEdit.EchoMode.Password); root.addWidget(self.password)
         hint=QLabel("Password format: username + 123"); hint.setAlignment(Qt.AlignmentFlag.AlignRight); hint.setStyleSheet("color:#1687D9;font-weight:600;"); root.addWidget(hint); root.addStretch()
         button=QPushButton("Sign in to SWIMS  →"); button.setStyleSheet("background:#1687D9;color:white;font-weight:700;"); button.clicked.connect(self._sign_in); root.addWidget(button)
@@ -938,11 +938,12 @@ class GenericRecordDialog(QDialog):
 
 
 class SettingsPage(QWidget):
-    def __init__(self, theme_changed, username: str):
+    def __init__(self, theme_changed, username: str, logout):
         super().__init__(); root=QVBoxLayout(self); root.setContentsMargins(0,0,0,0); root.setSpacing(16)
         root.addWidget(section_heading("Profile & settings","Manage your operator account and application preferences."))
         account=card(); al=QVBoxLayout(account); al.setContentsMargins(20,18,20,18); al.addWidget(label("Operator profile","sectionTitle")); al.addWidget(label(f"{username} · System operator")); al.addWidget(label(f"{username.lower()}@swims.local","muted")); root.addWidget(account)
-        prefs=card(); pl=QVBoxLayout(prefs); pl.setContentsMargins(20,18,20,18); pl.addWidget(label("Preferences","sectionTitle")); self.dark=QCheckBox("Use dark appearance"); self.dark.toggled.connect(theme_changed); pl.addWidget(self.dark); notifications=QCheckBox("Receive critical alert notifications"); notifications.setChecked(True); pl.addWidget(notifications); root.addWidget(prefs); root.addStretch()
+        prefs=card(); pl=QVBoxLayout(prefs); pl.setContentsMargins(20,18,20,18); pl.addWidget(label("Preferences","sectionTitle")); self.dark=QCheckBox("Use dark appearance"); self.dark.toggled.connect(theme_changed); pl.addWidget(self.dark); notifications=QCheckBox("Receive critical alert notifications"); notifications.setChecked(True); pl.addWidget(notifications); root.addWidget(prefs)
+        self.logout_button=make_button("Log out"); self.logout_button.setObjectName("danger"); self.logout_button.clicked.connect(logout); root.addWidget(self.logout_button,0,Qt.AlignmentFlag.AlignLeft); root.addStretch()
 
 
 class ReportsPage(QWidget):
@@ -1148,7 +1149,7 @@ class SwimsWindow(QMainWindow):
         top=QHBoxLayout(); breadcrumb=QLabel("Operations  /  <b>Dashboard</b>"); breadcrumb.setStyleSheet("color:#8295A6;"); top.addWidget(breadcrumb); top.addStretch(); self.conn=QLabel("●  DEMO DATA" if demo else "●  POSTGRESQL CONNECTED"); self.conn.setStyleSheet("color:#14835F;background:#E5F6EF;border-radius:9px;padding:7px 10px;font-size:10px;font-weight:700;"); top.addWidget(self.conn); self.theme_button=QPushButton("◐  Dark mode"); self.theme_button.setCheckable(True); self.theme_button.toggled.connect(self.toggle_theme); top.addWidget(self.theme_button); bell=QPushButton("♧  3"); bell.clicked.connect(lambda:self.navigate("Alerts")); top.addWidget(bell); bl.addLayout(top)
         self.page_stack=QStackedWidget(); bl.addWidget(self.page_stack,1); outer.addWidget(body,1); self.breadcrumb=breadcrumb
         self.dashboard=DashboardPage(repo,username); self.dashboard.view_all_button.clicked.connect(lambda:self.navigate("Alerts")); self.tanks=TanksPage(repo,self.refresh_dashboard); self.alerts=AlertsPage(repo)
-        profile=SettingsPage(self.toggle_theme,username); self.settings=profile
+        profile=SettingsPage(self.toggle_theme,username,self.logout); self.settings=profile
         self.page_map={"Dashboard":self.dashboard,
             "Communities":CommunityPage(repo,self.community_changed),
             "Tank management":self.tanks,
@@ -1174,6 +1175,13 @@ class SwimsWindow(QMainWindow):
         if title=="Communities": self.page_map[title].refresh()
         if isinstance(self.page_map[title],GenericPage): self.page_map[title].refresh()
         if title=="Reports": self.page_map[title].refresh()
+    def logout(self):
+        self.hide()
+        login=LoginDialog()
+        if login.exec()==QDialog.DialogCode.Accepted:
+            self.next_window=SwimsWindow(self.repo,self.demo,login.username.text())
+            self.next_window.show()
+        self.close()
     def refresh_dashboard(self): self.dashboard.refresh()
     def community_changed(self):
         self.dashboard.refresh()
