@@ -726,7 +726,7 @@ class TankDialog(QDialog):
 
 
 class LoginDialog(QDialog):
-    """Simple operator entry screen for the desktop prototype."""
+    """Sign-in for the six named SWIMS operators."""
     def __init__(self):
         super().__init__(); self.setWindowTitle("Sign in · SWIMS"); self.setFixedSize(440, 570)
         self.setStyleSheet("QDialog{background:#F4F8FB;} QLabel{color:#183B56;} QLineEdit{padding:13px;border:1px solid #E1EAF0;border-radius:10px;background:white;} QPushButton{padding:13px;border-radius:10px;}")
@@ -735,23 +735,28 @@ class LoginDialog(QDialog):
         name=QVBoxLayout(); t=QLabel("SWIMS"); t.setStyleSheet("font-size:21px;font-weight:800;letter-spacing:1px;color:#102A43;"); name.addWidget(t); sub=QLabel("SMART WATER INFRASTRUCTURE"); sub.setStyleSheet("font-size:9px;letter-spacing:1px;color:#8295A6;"); name.addWidget(sub); brand.addLayout(name); brand.addStretch(); root.addLayout(brand); root.addSpacing(18)
         art=QFrame(); art.setFixedHeight(142); art.setStyleSheet("background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #DDF5F7,stop:1 #DCEEFF);border-radius:18px;"); artlay=QVBoxLayout(art); artlay.addStretch(); wave=QLabel("     〰      〰      〰"); wave.setStyleSheet("font-size:26px;color:#1687D9;"); artlay.addWidget(wave); artlay.addWidget(QLabel("      Clean water. Connected communities.")); artlay.addStretch(); root.addWidget(art)
         welcome=QLabel("Welcome back"); welcome.setStyleSheet("font-size:22px;font-weight:700;color:#102A43;"); root.addWidget(welcome); root.addWidget(QLabel("Sign in to your water operations workspace."))
-        root.addSpacing(5); root.addWidget(QLabel("Work email")); self.email=QLineEdit(); self.email.setPlaceholderText("name@waterutility.org"); self.email.setText("amina@swims.gov.sl"); root.addWidget(self.email)
-        root.addWidget(QLabel("Password")); self.password=QLineEdit(); self.password.setPlaceholderText("Enter your password"); self.password.setEchoMode(QLineEdit.EchoMode.Password); self.password.setText("operator"); root.addWidget(self.password)
-        forgot=QLabel("Forgot password?"); forgot.setAlignment(Qt.AlignmentFlag.AlignRight); forgot.setStyleSheet("color:#1687D9;font-weight:600;"); root.addWidget(forgot); root.addStretch()
+        root.addSpacing(5); root.addWidget(QLabel("Username")); self.username=QLineEdit(); self.username.setPlaceholderText("Donald, Michael, Aziz, Joshua, Mohamed, or Alex"); root.addWidget(self.username)
+        root.addWidget(QLabel("Password")); self.password=QLineEdit(); self.password.setPlaceholderText("Enter your password"); self.password.setEchoMode(QLineEdit.EchoMode.Password); root.addWidget(self.password)
+        hint=QLabel("Password format: username + 123"); hint.setAlignment(Qt.AlignmentFlag.AlignRight); hint.setStyleSheet("color:#1687D9;font-weight:600;"); root.addWidget(hint); root.addStretch()
         button=QPushButton("Sign in to SWIMS  →"); button.setStyleSheet("background:#1687D9;color:white;font-weight:700;"); button.clicked.connect(self._sign_in); root.addWidget(button)
         root.addWidget(QLabel("Secure access for authorized utility staff"),0,Qt.AlignmentFlag.AlignCenter)
+    @staticmethod
+    def verify_credentials(username: str, password: str) -> Optional[str]:
+        canonical=next((name for name in LOGIN_USERS if name.casefold()==username.strip().casefold()),None)
+        return canonical if canonical and password==canonical+"123" else None
     def _sign_in(self):
-        if not self.email.text().strip() or not self.password.text():
-            QMessageBox.warning(self,"Sign in required","Enter your email and password to continue."); return
-        self.accept()
+        username=self.verify_credentials(self.username.text(),self.password.text())
+        if not username:
+            QMessageBox.warning(self,"Sign in failed","Check the username and password, then try again."); return
+        self.username.setText(username); self.accept()
 
 
 # ---------------------------------- Pages ----------------------------------
 class DashboardPage(QWidget):
-    def __init__(self, repo: AssetRepository):
-        super().__init__(); self.repo = repo
+    def __init__(self, repo: AssetRepository, username: str = "Michael"):
+        super().__init__(); self.repo = repo; self.username=username
         root = QVBoxLayout(self); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(18)
-        top = QHBoxLayout(); top.addWidget(section_heading("Good morning, Amina 👋", "Here’s what’s happening across your water network.")); top.addStretch()
+        top = QHBoxLayout(); top.addWidget(section_heading(f"Welcome, {self.username} 👋", "Here’s what’s happening across your water network.")); top.addStretch()
         live = QLabel("●  LIVE SYSTEM"); live.setStyleSheet("color:#14835F;background:#E5F6EF;border-radius:10px;padding:8px 12px;font-size:11px;font-weight:700;"); top.addWidget(live,0,Qt.AlignmentFlag.AlignTop); root.addLayout(top)
         self.metrics = QGridLayout(); self.metrics.setSpacing(12); self.metrics.setContentsMargins(0,0,0,0); root.addLayout(self.metrics); self._metric_cards=[]
         specs = [("Communities", "communities", "◈", PALETTE["blue"]),("Water tanks", "tanks", "▤", PALETTE["aqua"]),("Water stored", "water", "≈", PALETTE["green"]),("Active alerts", "alerts", "!", PALETTE["orange"])]
@@ -933,10 +938,10 @@ class GenericRecordDialog(QDialog):
 
 
 class SettingsPage(QWidget):
-    def __init__(self, theme_changed):
+    def __init__(self, theme_changed, username: str):
         super().__init__(); root=QVBoxLayout(self); root.setContentsMargins(0,0,0,0); root.setSpacing(16)
         root.addWidget(section_heading("Profile & settings","Manage your operator account and application preferences."))
-        account=card(); al=QVBoxLayout(account); al.setContentsMargins(20,18,20,18); al.addWidget(label("Operator profile","sectionTitle")); al.addWidget(label("Amina Mansaray · System operator")); al.addWidget(label("amina@swims.gov.sl","muted")); root.addWidget(account)
+        account=card(); al=QVBoxLayout(account); al.setContentsMargins(20,18,20,18); al.addWidget(label("Operator profile","sectionTitle")); al.addWidget(label(f"{username} · System operator")); al.addWidget(label(f"{username.lower()}@swims.local","muted")); root.addWidget(account)
         prefs=card(); pl=QVBoxLayout(prefs); pl.setContentsMargins(20,18,20,18); pl.addWidget(label("Preferences","sectionTitle")); self.dark=QCheckBox("Use dark appearance"); self.dark.toggled.connect(theme_changed); pl.addWidget(self.dark); notifications=QCheckBox("Receive critical alert notifications"); notifications.setChecked(True); pl.addWidget(notifications); root.addWidget(prefs); root.addStretch()
 
 
@@ -1126,8 +1131,8 @@ class AlertsPage(QWidget):
 
 
 class SwimsWindow(QMainWindow):
-    def __init__(self, repo: AssetRepository, demo: bool):
-        super().__init__(); self.repo=repo; self.demo=demo; self.setWindowTitle("SWIMS · Smart Water Infrastructure Management System")
+    def __init__(self, repo: AssetRepository, demo: bool, username: str = "Michael"):
+        super().__init__(); self.repo=repo; self.demo=demo; self.username=username; self.setWindowTitle("SWIMS · Smart Water Infrastructure Management System")
         available=QApplication.primaryScreen().availableGeometry(); width=max(900,min(1440,available.width()-32)); height=max(620,min(900,available.height()-48))
         self.setMinimumSize(min(980,width),min(660,height)); self.resize(width,height)
         shell=QWidget(); self.setCentralWidget(shell); outer=QHBoxLayout(shell); outer.setContentsMargins(0,0,0,0); outer.setSpacing(0)
@@ -1138,12 +1143,12 @@ class SwimsWindow(QMainWindow):
         names=[("⌂","Dashboard"),("▤","Communities"),("◉","Tank management"),("◌","Sensors"),("!","Alerts"),("↕","Transactions"),("⚙","Equipment"),("◍","Valves"),("▣","Maintenance"),("♙","Technicians"),("▥","Reports"),("●","Profile & settings")]
         for icon,title in names:
             b=QPushButton(f"{icon}    {title}"); b.setObjectName("nav"); b.setProperty("selected",title=="Dashboard"); b.clicked.connect(lambda checked=False,x=title:self.navigate(x)); sl.addWidget(b); self.nav_buttons.append((title,b))
-        sl.addStretch(); profile=QFrame(); profile.setStyleSheet("background:#1B3A53;border-radius:12px;"); pl=QHBoxLayout(profile); pl.setContentsMargins(10,10,10,10); avatar=QLabel("AM"); avatar.setAlignment(Qt.AlignmentFlag.AlignCenter); avatar.setFixedSize(34,34); avatar.setStyleSheet("background:#2E607D;color:white;border-radius:17px;font-weight:700;"); pl.addWidget(avatar); ptxt=QVBoxLayout(); pn=QLabel("Amina Mansaray"); pn.setStyleSheet("color:white;font-size:11px;font-weight:600;"); pr=QLabel("System operator"); pr.setStyleSheet("color:#91A9BB;font-size:10px;"); ptxt.addWidget(pn); ptxt.addWidget(pr); pl.addLayout(ptxt); sl.addWidget(profile); outer.addWidget(sidebar)
+        sl.addStretch(); profile=QFrame(); profile.setStyleSheet("background:#1B3A53;border-radius:12px;"); pl=QHBoxLayout(profile); pl.setContentsMargins(10,10,10,10); avatar=QLabel(username[:2].upper()); avatar.setAlignment(Qt.AlignmentFlag.AlignCenter); avatar.setFixedSize(34,34); avatar.setStyleSheet("background:#2E607D;color:white;border-radius:17px;font-weight:700;"); pl.addWidget(avatar); ptxt=QVBoxLayout(); pn=QLabel(username); pn.setStyleSheet("color:white;font-size:11px;font-weight:600;"); pr=QLabel("System operator"); pr.setStyleSheet("color:#91A9BB;font-size:10px;"); ptxt.addWidget(pn); ptxt.addWidget(pr); pl.addLayout(ptxt); sl.addWidget(profile); outer.addWidget(sidebar)
         body=QWidget(); bl=QVBoxLayout(body); bl.setContentsMargins(27,20,27,20); bl.setSpacing(18)
         top=QHBoxLayout(); breadcrumb=QLabel("Operations  /  <b>Dashboard</b>"); breadcrumb.setStyleSheet("color:#8295A6;"); top.addWidget(breadcrumb); top.addStretch(); self.conn=QLabel("●  DEMO DATA" if demo else "●  POSTGRESQL CONNECTED"); self.conn.setStyleSheet("color:#14835F;background:#E5F6EF;border-radius:9px;padding:7px 10px;font-size:10px;font-weight:700;"); top.addWidget(self.conn); self.theme_button=QPushButton("◐  Dark mode"); self.theme_button.setCheckable(True); self.theme_button.toggled.connect(self.toggle_theme); top.addWidget(self.theme_button); bell=QPushButton("♧  3"); bell.clicked.connect(lambda:self.navigate("Alerts")); top.addWidget(bell); bl.addLayout(top)
         self.page_stack=QStackedWidget(); bl.addWidget(self.page_stack,1); outer.addWidget(body,1); self.breadcrumb=breadcrumb
-        self.dashboard=DashboardPage(repo); self.dashboard.view_all_button.clicked.connect(lambda:self.navigate("Alerts")); self.tanks=TanksPage(repo,self.refresh_dashboard); self.alerts=AlertsPage(repo)
-        profile=SettingsPage(self.toggle_theme); self.settings=profile
+        self.dashboard=DashboardPage(repo,username); self.dashboard.view_all_button.clicked.connect(lambda:self.navigate("Alerts")); self.tanks=TanksPage(repo,self.refresh_dashboard); self.alerts=AlertsPage(repo)
+        profile=SettingsPage(self.toggle_theme,username); self.settings=profile
         self.page_map={"Dashboard":self.dashboard,
             "Communities":CommunityPage(repo,self.community_changed),
             "Tank management":self.tanks,
@@ -1231,7 +1236,7 @@ def main() -> int:
         QMessageBox.critical(None,"Database connection failed",f"SWIMS could not connect to the configured PostgreSQL schema.\n\n{exc}\n\nCheck DB_* values in .env and confirm the database is available."); return 1
     login=LoginDialog()
     if login.exec()!=QDialog.DialogCode.Accepted: return 0
-    window=SwimsWindow(repo,demo); window.show(); return app.exec()
+    window=SwimsWindow(repo,demo,login.username.text()); window.show(); return app.exec()
 
 
 if __name__ == "__main__":
