@@ -21,7 +21,7 @@ from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QMessageBox, QPushButton, QFileDialog, QSizePolicy,
+    QMainWindow, QMessageBox, QPushButton, QFileDialog, QSizePolicy, QScrollArea,
     QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
     QHeaderView, QGraphicsDropShadowEffect,
 )
@@ -574,12 +574,16 @@ PALETTE = {
     "green": "#20A879", "orange": "#E59A27", "red": "#E05B63", "white": "#FFFFFF",
 }
 
+LOGIN_USERS = ("Donald", "Michael", "Aziz", "Joshua", "Mohamed", "Alex")
+
 APP_STYLE = f"""
 QWidget {{ font-family: 'Segoe UI'; color: {PALETTE['ink']}; font-size: 13px; }}
 QMainWindow, QDialog {{ background: {PALETTE['canvas']}; }}
 QFrame#sidebar {{ background: {PALETTE['navy']}; border: none; }}
 QFrame#card {{ background: white; border: 1px solid {PALETTE['line']}; border-radius: 14px; }}
+QFrame#alertMessage {{ background: #F3F8FB; border: none; border-radius: 9px; }}
 QLabel#muted {{ color: {PALETTE['muted']}; }}
+QLabel#alertDetail {{ color: {PALETTE['ink']}; }}
 QLabel#pageTitle {{ color: {PALETTE['navy']}; font-size: 25px; font-weight: 700; }}
 QLabel#sectionTitle {{ color: {PALETTE['navy']}; font-size: 15px; font-weight: 700; }}
 QPushButton {{ background: white; border: 1px solid {PALETTE['line']}; border-radius: 9px; padding: 9px 14px; font-weight: 600; }}
@@ -605,8 +609,10 @@ QScrollArea {{ border: none; background: transparent; }}
 DARK_STYLE = APP_STYLE + f"""
 QMainWindow, QDialog, QWidget {{ background: #101D29; color: #E6EEF5; }}
 QFrame#card {{ background: #182A39; border: 1px solid #294052; }}
+QFrame#alertMessage {{ background: #203444; }}
 QLabel#pageTitle, QLabel#sectionTitle {{ color: #F0F6FA; }}
 QLabel#muted {{ color: #9DB0BF; }}
+QLabel#alertDetail {{ color: #D8E4EC; }}
 QLineEdit, QComboBox, QTableWidget {{ background: #182A39; color: #E6EEF5; border-color: #294052; }}
 QHeaderView::section {{ background: #203444; color: #B8C8D4; border-color: #294052; }}
 QPushButton {{ background: #203444; color: #E6EEF5; border-color: #294052; }}
@@ -1037,18 +1043,26 @@ class GenericPage(QWidget):
 
 class AlertsPage(QWidget):
     def __init__(self, repo: AssetRepository):
-        super().__init__(); self.repo=repo; root=QVBoxLayout(self); root.setContentsMargins(0,0,0,0); root.setSpacing(16); top=QHBoxLayout(); top.addWidget(section_heading("Alerts & incidents","Review network events and close resolved issues.")); top.addStretch(); root.addLayout(top)
-        self.list=QVBoxLayout(); self.list.setSpacing(10); root.addLayout(self.list); root.addStretch(); self.refresh()
+        super().__init__(); self.repo=repo; root=QVBoxLayout(self); root.setContentsMargins(0,0,0,0); root.setSpacing(16); top=QHBoxLayout(); top.addWidget(section_heading("Alerts & incidents","Review the full alert message, affected tank, and resolution status.")); top.addStretch(); root.addLayout(top)
+        self.scroll=QScrollArea(); self.scroll.setWidgetResizable(True); self.scroll.setFrameShape(QFrame.Shape.NoFrame); self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list_host=QWidget(); self.list=QVBoxLayout(self.list_host); self.list.setContentsMargins(2,2,10,2); self.list.setSpacing(12); self.scroll.setWidget(self.list_host); root.addWidget(self.scroll,1); self.refresh()
     def refresh(self):
         while self.list.count():
             item=self.list.takeAt(0)
             if item.widget(): item.widget().deleteLater()
         for a in self.repo.alerts():
-            f=card(); row=QHBoxLayout(f); row.setContentsMargins(16,13,16,13); dot=label("!"); col=PALETTE["red"] if a.severity=="Critical" else PALETTE["orange"] if a.severity=="Warning" else PALETTE["blue"]; dot.setStyleSheet(f"color:{col};background:#18{col[1:]};border-radius:16px;padding:9px;font-size:16px;font-weight:700;"); row.addWidget(dot)
-            txt=QVBoxLayout(); txt.addWidget(label(a.title)); txt.addWidget(label(f"{a.tank}  ·  {a.time}","muted")); txt.addWidget(label(a.detail,"muted")); row.addLayout(txt,1); badge=label("Resolved" if a.resolved else a.severity); badge.setStyleSheet(f"color:{col};font-weight:700;"); row.addWidget(badge)
+            frame=card(); frame.setMinimumHeight(118); row=QHBoxLayout(frame); row.setContentsMargins(16,14,16,14); row.setSpacing(14)
+            col=PALETTE["red"] if a.severity=="Critical" else PALETTE["orange"] if a.severity=="Warning" else PALETTE["blue"]
+            icon=label("!"); icon.setAlignment(Qt.AlignmentFlag.AlignCenter); icon.setFixedSize(38,38); icon.setStyleSheet(f"color:{col};background:#18{col[1:]};border-radius:12px;font-size:17px;font-weight:700;"); row.addWidget(icon,0,Qt.AlignmentFlag.AlignTop)
+            content=QVBoxLayout(); content.setSpacing(6); title=label(a.title); title.setStyleSheet("font-size:14px;font-weight:700;color:#102A43;"); content.addWidget(title)
+            content.addWidget(label(f"{a.tank}   ·   {a.time}","muted"))
+            message=QFrame(); message.setObjectName("alertMessage"); message_layout=QVBoxLayout(message); message_layout.setContentsMargins(11,8,11,8)
+            detail=label(a.detail,"alertDetail"); detail.setWordWrap(True); detail.setMinimumWidth(280); detail.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Preferred); message_layout.addWidget(detail); content.addWidget(message); row.addLayout(content,1)
+            actions=QVBoxLayout(); actions.setSpacing(10); badge=label("Resolved" if a.resolved else a.severity); badge.setAlignment(Qt.AlignmentFlag.AlignCenter); badge.setStyleSheet(f"color:{col};background:#18{col[1:]};border-radius:9px;padding:7px 9px;font-size:11px;font-weight:700;"); actions.addWidget(badge,0,Qt.AlignmentFlag.AlignRight)
             if not a.resolved:
-                button=make_button("Mark resolved"); button.clicked.connect(lambda checked=False,x=a:self.resolve(x)); row.addWidget(button)
-            self.list.addWidget(f)
+                button=make_button("Mark resolved"); button.clicked.connect(lambda checked=False,x=a:self.resolve(x)); actions.addWidget(button,0,Qt.AlignmentFlag.AlignRight)
+            actions.addStretch(); row.addLayout(actions); self.list.addWidget(frame)
+        self.list.addStretch(1)
     def resolve(self,alert):
         try: self.repo.resolve_alert(alert.alert_id); self.refresh()
         except Exception as exc: QMessageBox.critical(self,"Could not resolve alert",str(exc))
