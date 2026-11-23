@@ -877,7 +877,21 @@ class CommunityPage(QWidget):
         self.search=QLineEdit(); self.search.setPlaceholderText("Search communities…"); self.search.setMaximumWidth(260); top.addWidget(self.search)
         add=make_button("＋  Add community",True); add.clicked.connect(self.add_community); top.addWidget(add); root.addLayout(top)
         frame=card(); layout=QVBoxLayout(frame); layout.setContentsMargins(8,8,8,8)
-        self.table=QTableWidget(0,5); self.table.setHorizontalHeaderLabels(["COMMUNITY","LOCATION","TANKS","HOUSEHOLDS","ACTIONS"]); self.table.verticalHeader().setVisible(False); self.table.setShowGrid(False); self.table.setAlternatingRowColors(True); self.table.setWordWrap(False); self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter); self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch); self.table.horizontalHeader().setSectionResizeMode(4,QHeaderView.ResizeMode.Fixed); self.table.horizontalHeader().resizeSection(4,164); layout.addWidget(self.table); root.addWidget(frame,1)
+        self.table=QTableWidget(0,5)
+        self.table.setHorizontalHeaderLabels(["COMMUNITY","LOCATION","TANKS","HOUSEHOLDS","ACTIONS"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setShowGrid(False)
+        self.table.setAlternatingRowColors(True)
+        self.table.setWordWrap(False)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.horizontalHeader().setDefaultAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(4,QHeaderView.ResizeMode.Fixed)
+        self.table.horizontalHeader().resizeSection(4,164)
+        layout.addWidget(self.table)
+        root.addWidget(frame,1)
         self.search.textChanged.connect(self._filter); self.refresh()
     def refresh(self):
         communities=self.repo.communities(); self.table.setRowCount(len(communities))
